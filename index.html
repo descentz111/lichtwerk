@@ -87,6 +87,20 @@ output{font-variant-numeric:tabular-nums;font-size:15px;color:var(--muted);text-
 .chip{flex:none;height:30px;padding:0 14px;border-radius:15px;border:0;background:var(--raise);font-size:14px;font-weight:500;color:var(--fg)}
 .chip[aria-pressed="true"]{background:var(--fg);color:#000}
 
+.fams{display:flex;gap:22px;overflow-x:auto;padding:2px 2px 12px;scrollbar-width:none;margin-top:2px}
+.fams::-webkit-scrollbar{display:none}
+.fam{flex:none;border:0;background:none;padding:4px 0;color:var(--faint);font-size:14px;font-weight:500;letter-spacing:.03em}
+.fam[aria-pressed="true"]{color:var(--fg)}
+.lks{display:flex;align-items:stretch;gap:0;height:76px;border-radius:12px;overflow:hidden;margin-bottom:14px}
+.swc{flex:1;min-width:0;border:0;padding:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;position:relative;
+  font-size:12px;font-weight:600;letter-spacing:.08em}
+.swc span{opacity:.55}
+.swc svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;display:none}
+.swc[aria-pressed="true"]{flex:1.45}
+.swc[aria-pressed="true"]::after{content:"";position:absolute;inset:0;background:rgba(0,0,0,.28)}
+.swc[aria-pressed="true"] svg{display:block;position:relative;z-index:1}
+.swc[aria-pressed="true"] span{opacity:1;position:relative;z-index:1}
+@media (prefers-reduced-motion:no-preference){ .swc{transition:flex .25s ease} }
 .strip{display:flex;gap:10px;overflow-x:auto;padding:2px 2px 4px;scroll-snap-type:x proximity;scrollbar-width:none}
 .strip::-webkit-scrollbar{display:none}
 .look{flex:none;width:78px;border:0;background:none;padding:0;display:flex;flex-direction:column;gap:6px;scroll-snap-align:start;text-align:center}
@@ -195,9 +209,10 @@ input[type=range]:disabled{opacity:.3}
       <button class="tab pro-only" role="tab" data-tab="mask" aria-selected="false">Maske</button>
     </div>
     <div class="pane" id="p-looks">
-      <div class="amount"><label for="amt">Stärke</label><input type="range" id="amt" min="0" max="1" step="0.01"><output id="amtOut"></output></div>
-      <div class="chips" id="cats"></div>
+      <div class="fams" id="cats"></div>
+      <div class="lks" id="swatches" hidden></div>
       <div class="strip" id="strip"></div>
+      <div class="amount"><label for="amt">Stärke</label><input type="range" id="amt" min="0" max="1" step="0.01"><output id="amtOut"></output></div>
     </div>
     <div class="pane" id="p-light" hidden></div>
     <div class="pane" id="p-text" hidden></div>
@@ -253,38 +268,65 @@ const $ = s => document.querySelector(s);
 
 /* ---------- Looks ---------- */
 const DEF = {exposure:0,contrast:0,highlights:0,shadows:0,black:0,white:1,mid:1,temp:0,tint:0,saturation:1,vibrance:0,hue:0,
-  shCol:"#2a6f8f",shAmt:0,hiCol:"#f0a050",hiAmt:0,balance:0,fade:0,grain:0,vig:0,lut:"",lutName:"",lutAmt:1};
+  shCol:"#2a6f8f",shAmt:0,hiCol:"#f0a050",hiAmt:0,balance:0,fade:0,grain:0,vig:0,lut:"",lutName:"",lutAmt:1,gSat:1,bSat:1};
 
+/* Farbfamilien: je 4 Varianten. 1 = dezent, 2 = Standard, 3 = kräftig/moody, 4 = Abwandlung */
+const FAMILIES = [
+  {key:"tk", name:"Terrakotta", code:"TK", vars:[
+    {temp:.18,tint:.04,saturation:.85,contrast:.1,fade:.2,shCol:"#4a3328",shAmt:.3,hiCol:"#f2d6b8",hiAmt:.25,gSat:.6,bSat:.75,hue:-3},
+    {temp:.26,saturation:.8,fade:.28,contrast:.08,shCol:"#4a3328",shAmt:.4,hiCol:"#f2d6b8",hiAmt:.32,gSat:.5,bSat:.65,black:.02,hue:-3},
+    {temp:.32,tint:.08,saturation:.9,contrast:.22,exposure:-.08,shCol:"#3d2418",shAmt:.5,hiCol:"#f5c9a0",hiAmt:.35,gSat:.45,bSat:.6,vig:.15,hue:-4},
+    {temp:.2,saturation:.7,fade:.35,exposure:.08,hiCol:"#f0dcc6",hiAmt:.3,shCol:"#5a4636",shAmt:.25,gSat:.55,bSat:.7}]},
+  {key:"gr", name:"Graphit", code:"GR", vars:[
+    {saturation:.82,contrast:.12,exposure:-.1,shCol:"#2e3b48",shAmt:.35,hiCol:"#e9e4dc",hiAmt:.12,fade:.12,gSat:.7,bSat:.85},
+    {saturation:.72,contrast:.2,exposure:-.22,shCol:"#2e3b48",shAmt:.45,hiCol:"#e9e4dc",hiAmt:.12,fade:.15,vig:.15,gSat:.65,bSat:.8},
+    {saturation:.6,contrast:.28,exposure:-.35,black:.02,mid:.92,shCol:"#26323e",shAmt:.55,hiCol:"#e4ded6",hiAmt:.1,vig:.25,gSat:.6,bSat:.75},
+    {temp:-.15,saturation:.7,shCol:"#25405a",shAmt:.5,hiCol:"#dfe6ea",hiAmt:.2,fade:.1,contrast:.12,gSat:.65}]},
+  {key:"sb", name:"Salbei", code:"SB", vars:[
+    {tint:-.12,temp:-.05,saturation:.8,fade:.15,contrast:.1,shCol:"#2f4a40",shAmt:.35,hiCol:"#ece7d6",hiAmt:.15,gSat:.75,bSat:.7},
+    {tint:-.18,saturation:.75,fade:.22,shCol:"#29463c",shAmt:.45,hiCol:"#e8e2cc",hiAmt:.2,exposure:-.05,gSat:.75,bSat:.65},
+    {tint:-.22,temp:-.1,saturation:.68,contrast:.22,exposure:-.15,shCol:"#1f3c34",shAmt:.55,hiCol:"#e4e0cc",hiAmt:.15,vig:.2,gSat:.85,bSat:.6},
+    {tint:-.1,temp:.1,saturation:.78,fade:.28,hiCol:"#efe3c4",hiAmt:.3,shCol:"#3a4a3a",shAmt:.3,gSat:.7,bSat:.7}]},
+  {key:"dn", name:"Düne", code:"DN", vars:[
+    {temp:.12,exposure:.1,contrast:-.05,saturation:.85,fade:.18,hiCol:"#f6e6cf",hiAmt:.3,shCol:"#7a6a5a",shAmt:.2,bSat:.8,gSat:.7},
+    {temp:.18,exposure:.15,contrast:-.1,saturation:.78,fade:.25,highlights:-.15,hiCol:"#f6e6cf",hiAmt:.38,shCol:"#7a6a5a",shAmt:.25,bSat:.75,gSat:.65},
+    {temp:.22,tint:.05,exposure:.05,contrast:.12,saturation:.88,hiCol:"#f4d7b0",hiAmt:.4,shCol:"#6a4e3a",shAmt:.3,gSat:.6,bSat:.75},
+    {temp:.08,exposure:.2,contrast:-.15,saturation:.65,fade:.3,hiCol:"#f3ece2",hiAmt:.2,shCol:"#857a70",shAmt:.15,gSat:.6}]},
+  {key:"lg", name:"Lagune", code:"LG", vars:[
+    {contrast:.15,saturation:.92,shCol:"#1d5560",shAmt:.35,hiCol:"#f3c9a0",hiAmt:.22,bSat:1.1,gSat:.75,hue:4},
+    {contrast:.22,saturation:.95,temp:.03,shCol:"#1d5560",shAmt:.48,hiCol:"#f3c9a0",hiAmt:.3,gSat:.65,bSat:1.05,fade:.08,hue:4},
+    {contrast:.3,exposure:-.12,saturation:.88,shCol:"#123f4a",shAmt:.6,hiCol:"#f0b888",hiAmt:.35,vig:.2,gSat:.6,bSat:1.0,hue:5},
+    {contrast:.12,saturation:.8,fade:.2,shCol:"#2a6068",shAmt:.4,hiCol:"#f1dcc0",hiAmt:.25,gSat:.7}]},
+  {key:"es", name:"Espresso", code:"ES", vars:[
+    {temp:.15,contrast:.25,saturation:.85,exposure:-.12,shCol:"#2b1c14",shAmt:.4,hiCol:"#e9c9a4",hiAmt:.2,gSat:.6,bSat:.8},
+    {temp:.22,contrast:.32,saturation:.8,exposure:-.2,shCol:"#2b1c14",shAmt:.5,hiCol:"#e9c9a4",hiAmt:.28,vig:.2,gSat:.5,bSat:.7},
+    {temp:.25,tint:.05,contrast:.4,saturation:.75,exposure:-.3,mid:.92,shCol:"#24150e",shAmt:.6,hiCol:"#e6c098",hiAmt:.3,vig:.3,gSat:.45,bSat:.65},
+    {temp:.18,contrast:.18,saturation:.7,fade:.18,exposure:-.1,shCol:"#33241a",shAmt:.35,hiCol:"#e6d2bb",hiAmt:.25,gSat:.55}]},
+  {key:"nl", name:"Nordlicht", code:"NL", vars:[
+    {temp:-.15,contrast:.1,saturation:.85,exposure:.05,shCol:"#2c3e52",shAmt:.3,hiCol:"#eef3f6",hiAmt:.15,gSat:.8},
+    {temp:-.25,saturation:.78,contrast:.18,shCol:"#2c3e52",shAmt:.42,hiCol:"#eef3f6",hiAmt:.2,fade:.08,gSat:.75},
+    {temp:-.32,tint:.04,saturation:.7,contrast:.25,exposure:-.12,shCol:"#1c2f45",shAmt:.55,hiCol:"#e6eef4",hiAmt:.15,vig:.2,gSat:.7},
+    {temp:-.1,saturation:.65,fade:.25,exposure:.12,contrast:-.05,hiCol:"#f1f4f5",hiAmt:.2,shCol:"#4a5866",shAmt:.25,gSat:.7}]},
+  {key:"pd", name:"Puder", code:"PD", vars:[
+    {tint:.1,temp:.06,saturation:.78,fade:.25,exposure:.1,contrast:-.08,hiCol:"#f7d9d2",hiAmt:.3,shCol:"#7d6a78",shAmt:.2,gSat:.7},
+    {tint:.15,saturation:.72,fade:.32,exposure:.15,contrast:-.12,hiCol:"#f7d9d2",hiAmt:.38,shCol:"#7d6a78",shAmt:.28,gSat:.65},
+    {tint:.08,temp:-.05,saturation:.7,fade:.3,hiCol:"#e9dcef",hiAmt:.3,shCol:"#6c7a8c",shAmt:.3,gSat:.7},
+    {tint:.12,temp:.12,saturation:.8,fade:.22,hiCol:"#f8dcc4",hiAmt:.35,exposure:.08,shCol:"#806a66",shAmt:.2,gSat:.7}]},
+  {key:"sl", name:"Silber", code:"SL", vars:[
+    {saturation:0,contrast:.2,fade:.08},
+    {saturation:0,contrast:.42,exposure:-.08,vig:.2,grain:.2},
+    {saturation:0,contrast:.15,fade:.25,shCol:"#4a3a32",shAmt:.35,hiCol:"#efe4d4",hiAmt:.25,grain:.15},
+    {saturation:0,contrast:.3,shCol:"#2a3a48",shAmt:.35,hiCol:"#e6ecef",hiAmt:.12,grain:.15}]},
+  {key:"nt", name:"Natürlich", code:"NT", vars:[
+    {},
+    {contrast:.1,vibrance:.15,highlights:-.1,shadows:.08},
+    {temp:.08,vibrance:.12,contrast:.06},
+    {fade:.1,contrast:-.05,saturation:.92}]},
+];
 const LOOKS = [
-  ["neutral","Neutral","Alle",{}],
-  ["tealorange","Teal & Orange","Kino",{contrast:.25,saturation:1.08,shCol:"#1f6f86",shAmt:.6,hiCol:"#ffa860",hiAmt:.45,temp:.05,vig:.25}],
-  ["blockbuster","Blockbuster","Kino",{contrast:.45,saturation:1.15,shCol:"#0f5a78",shAmt:.85,hiCol:"#ff9a4a",hiAmt:.6,black:.0,highlights:-.2,vig:.35}],
-  ["neonoir","Neo-Noir","Kino",{saturation:.55,contrast:.5,shCol:"#0d4d5c",shAmt:.7,hiCol:"#d8e8e0",hiAmt:.2,exposure:-.2,vig:.45}],
-  ["nachtfahrt","Nachtfahrt","Kino",{temp:-.6,exposure:-.55,saturation:.65,contrast:.25,shCol:"#0a2a5a",shAmt:.7,hiCol:"#a8c8ff",hiAmt:.25,vig:.4}],
-  ["wueste","Wüste","Kino",{temp:.45,tint:.05,contrast:.35,saturation:.9,hiCol:"#ffc870",hiAmt:.55,shCol:"#5a3a1a",shAmt:.35,highlights:-.15}],
-  ["thriller","Thriller","Kino",{tint:-.3,saturation:.7,contrast:.35,shCol:"#1d4a3c",shAmt:.6,hiCol:"#d8e0b0",hiAmt:.25,exposure:-.15,vig:.4}],
-  ["analog","Analog Warm","Film",{temp:.25,fade:.25,contrast:.15,saturation:.9,shCol:"#3a4f5a",shAmt:.3,hiCol:"#ffd8a0",hiAmt:.3,black:.03,grain:.35}],
-  ["portrait400","Porträt 400","Film",{temp:.12,tint:.06,saturation:.82,contrast:.08,fade:.18,hiCol:"#ffd9c0",hiAmt:.3,shCol:"#4a5a6a",shAmt:.2,grain:.25,highlights:-.15}],
-  ["dia","Dia 64","Film",{contrast:.4,saturation:1.25,vibrance:.2,temp:.08,shCol:"#20304a",shAmt:.3,black:0,highlights:-.1,grain:.2}],
-  ["abgelaufen","Abgelaufen","Film",{tint:.3,fade:.45,saturation:.75,hue:-6,hiCol:"#ffd0b0",hiAmt:.4,shCol:"#5a2a4a",shAmt:.35,grain:.5,vig:.3}],
-  ["cross","Cross-Process","Film",{contrast:.4,saturation:1.3,shCol:"#2a5a9a",shAmt:.45,hiCol:"#f0f070",hiAmt:.5,tint:-.12,grain:.25}],
-  ["siebziger","70er","Film",{temp:.3,tint:.1,fade:.35,saturation:.8,hue:4,hiCol:"#ffb070",hiAmt:.35,shCol:"#6a3a3a",shAmt:.3,grain:.4,vig:.25}],
-  ["goldenestunde","Goldene Stunde","Warm",{temp:.45,tint:.08,saturation:1.15,hiCol:"#ffc070",hiAmt:.5,shCol:"#5a3a6a",shAmt:.2,exposure:.1}],
-  ["pfirsich","Pfirsich","Warm",{temp:.2,tint:.18,fade:.2,saturation:.95,hiCol:"#ffc8a8",hiAmt:.45,exposure:.12,contrast:-.05}],
-  ["herbst","Herbst","Warm",{temp:.35,hue:-8,saturation:1.1,contrast:.25,shCol:"#4a2a1a",shAmt:.4,hiCol:"#ffb060",hiAmt:.35,vig:.25}],
-  ["abendrot","Abendrot","Warm",{temp:.55,tint:.25,saturation:1.2,contrast:.2,hiCol:"#ff8a5a",hiAmt:.5,shCol:"#3a1a4a",shAmt:.4}],
-  ["nordisch","Nordisch","Kühl",{temp:-.3,saturation:.7,contrast:.1,fade:.15,exposure:.1,shCol:"#30485a",shAmt:.35,highlights:-.1}],
-  ["eisblau","Eisblau","Kühl",{temp:-.5,tint:.05,saturation:.8,contrast:.2,shCol:"#1c3a66",shAmt:.5,hiCol:"#d8ecff",hiAmt:.3,exposure:.08}],
-  ["nebelmorgen","Nebelmorgen","Kühl",{temp:-.15,fade:.5,saturation:.65,contrast:-.2,exposure:.15,shCol:"#7890a0",shAmt:.4}],
-  ["moosgruen","Moosgrün","Kühl",{temp:-.1,tint:-.2,saturation:.75,contrast:.2,shCol:"#1d4a3c",shAmt:.55,hiCol:"#e8dcb0",hiAmt:.25,exposure:-.15,fade:.15,vig:.3}],
-  ["noir","Noir","S/W",{saturation:0,contrast:.55,mid:.95,black:.0,vig:.4,grain:.3}],
-  ["silber","Silber","S/W",{saturation:0,contrast:.1,fade:.2,exposure:.1,highlights:-.2,shadows:.15,grain:.2}],
-  ["selen","Selen","S/W",{saturation:0,contrast:.3,shCol:"#5a3048",shAmt:.5,hiCol:"#f0e0c8",hiAmt:.35,grain:.25}],
-  ["hart","Hartes S/W","S/W",{saturation:0,contrast:.9,black:0,white:1.08,grain:.45,vig:.3}],
-  ["matt","Matt","Matt",{fade:.55,contrast:-.15,saturation:.85,black:.06}],
-  ["pastell","Pastell","Matt",{saturation:.72,fade:.4,exposure:.18,contrast:-.12,hiCol:"#ffd0e0",hiAmt:.35,shCol:"#a0c8e0",shAmt:.3}],
-  ["bleach","Bleach Bypass","Matt",{saturation:.42,contrast:.55,white:1.05,fade:.05,grain:.2}],
-].map(([key,name,cat,p]) => ({key,name,cat,p}));
+  {key:"neutral", name:"Neutral", cat:"-", p:{}},
+  ...FAMILIES.flatMap(f => f.vars.map((p, i) => ({key:f.key + (i+1), code:f.code + (i+1), fam:f.key, name:`${f.name} ${f.code}${i+1}`, cat:f.name, p}))),
+];
 
 const store = {
   get(k,d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch{ return d; } },
@@ -307,7 +349,7 @@ precision mediump float;
 varying vec2 v;
 uniform sampler2D src; uniform sampler2D lut; uniform sampler2D mask; uniform float uHasMask;
 uniform vec2 uRes;
-uniform float uAmount,uExp,uCon,uSat,uVib,uTemp,uTint,uHue,uBlack,uMid,uWhite,uSh,uHi,uFade,uShA,uHiA,uBal,uLutA,uLutN,uGrain,uVig;
+uniform float uAmount,uExp,uCon,uSat,uVib,uTemp,uTint,uHue,uBlack,uMid,uWhite,uSh,uHi,uFade,uShA,uHiA,uBal,uLutA,uLutN,uGrain,uVig,uGSat,uBSat;
 uniform vec3 uShC,uHiC;
 float luma(vec3 c){return dot(c,vec3(.2126,.7152,.0722));}
 vec3 hueRot(vec3 c,float a){vec3 k=vec3(.57735);float ca=cos(a);return c*ca+cross(k,c)*sin(a)+k*dot(k,c)*(1.-ca);}
@@ -327,6 +369,14 @@ void main(){
   vec3 s=c*c*(3.-2.*c);
   c= uCon>=0. ? mix(c,s,uCon) : mix(c,vec3(.5),-uCon*.5);
   c=hueRot(c,uHue);
+  { float mx0=max(c.r,max(c.g,c.b)), mn0=min(c.r,min(c.g,c.b)), d0=mx0-mn0;
+    if(d0>.0001){
+      float h = mx0==c.r ? mod((c.g-c.b)/d0,6.) : (mx0==c.g ? (c.b-c.r)/d0+2. : (c.r-c.g)/d0+4.); h/=6.;
+      float wg = smoothstep(.10,.20,h)*(1.-smoothstep(.42,.50,h));
+      float wb = smoothstep(.44,.52,h)*(1.-smoothstep(.72,.80,h));
+      float lq = luma(c);
+      c = mix(vec3(lq), c, 1. + (uGSat-1.)*wg + (uBSat-1.)*wb);
+    } }
   l=luma(c); float mx=max(c.r,max(c.g,c.b)), mn=min(c.r,min(c.g,c.b));
   c=mix(vec3(l),c,uSat*(1.+uVib*(1.-(mx-mn))));
   l=clamp(luma(c),0.,1.);
@@ -426,7 +476,7 @@ class Renderer {
       f("uAmount",L.amount); f("uExp",p.exposure); f("uCon",p.contrast); f("uSat",p.saturation); f("uVib",p.vibrance);
       f("uTemp",p.temp); f("uTint",p.tint); f("uHue",p.hue*Math.PI/180); f("uBlack",p.black); f("uMid",p.mid); f("uWhite",p.white);
       f("uSh",p.shadows); f("uHi",p.highlights); f("uFade",p.fade); f("uShA",p.shAmt); f("uHiA",p.hiAmt); f("uBal",p.balance);
-      f("uGrain",p.grain); f("uVig",p.vig);
+      f("uGrain",p.grain); f("uVig",p.vig); f("uGSat",p.gSat ?? 1); f("uBSat",p.bSat ?? 1);
       f("uLutA",lt ? p.lutAmt : 0); f("uLutN",lt ? lt.size : 2);
       gl.uniform3fv(u.uShC,hex3(p.shCol)); gl.uniform3fv(u.uHiC,hex3(p.hiCol));
       gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
@@ -443,8 +493,8 @@ const mkLayer = (key, amount=1) => { const lk = lookByKey(key) || LOOKS[0];
 
 const S = {
   source:null, isDemo:true, fileName:"lichtwerk",
-  layers:[mkLayer("tealorange",.85)], sel:null,
-  cat:"Alle", tab:"looks", showOrig:false,
+  layers:[mkLayer("tk2",.9)], sel:null,
+  cat:"Terrakotta", tab:"looks", showOrig:false,
   undo:[], redo:[], last:null,
   masks:{}, pro:false, brush:{erase:true, size:12, soft:.6, flow:.6, show:true}, brushAt:null
 };
@@ -1402,20 +1452,59 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => openTab(t.datas
 const amt = $("#amt");
 amt.oninput = () => { const L = colorTarget(); if(!L) return; L.amount = +amt.value; $("#amtOut").textContent = Math.round(L.amount*100); changed(false); };
 
+const famByName = n => FAMILIES.find(f => f.name === n) || null;
 function buildCats(){
-  const cats = [...(setups.length ? ["Setups"] : []), "Alle", ...(customLooks.length ? ["Eigene"] : []), "Kino","Film","Warm","Kühl","S/W","Matt"];
-  if(!cats.includes(S.cat)) S.cat = "Alle";
+  const names = [...(setups.length ? ["Setups"] : []), ...(customLooks.length ? ["Eigene"] : []), ...FAMILIES.map(f => f.name)];
+  if(!names.includes(S.cat)){ const L = colorTarget(), lk = L && lookByKey(L.look); S.cat = (lk && famByName(lk.cat)) ? lk.cat : FAMILIES[0].name; }
   const box = $("#cats"); box.replaceChildren();
-  for(const c of cats){
-    const b = document.createElement("button"); b.className = "chip"; b.textContent = c;
-    b.setAttribute("aria-pressed", c === S.cat);
-    b.onclick = () => { S.cat = c; buildCats(); buildStrip(); };
+  for(const n of names){
+    const b = document.createElement("button"); b.className = "fam"; b.textContent = n;
+    b.setAttribute("aria-pressed", n === S.cat);
+    b.onclick = () => { S.cat = n; buildCats(); buildStrip(); };
     box.append(b);
   }
+  const on = box.querySelector('[aria-pressed="true"]');
+  if(on) box.scrollLeft = Math.max(0, on.offsetLeft - box.clientWidth/2 + on.offsetWidth/2);
+}
+const swatchCache = {}; let SWR = null;
+function swatchColor(lk){
+  if(swatchCache[lk.key]) return swatchCache[lk.key];
+  if(!SWR){
+    SWR = new Renderer(document.createElement("canvas"));
+    const c = document.createElement("canvas"); c.width = 48; c.height = 4;
+    const x = c.getContext("2d"), g = x.createLinearGradient(0, 0, 48, 0);
+    g.addColorStop(0, "#3c3a38"); g.addColorStop(1, "#d6d2ce"); x.fillStyle = g; x.fillRect(0, 0, 48, 4);
+    SWR.setSource(c);
+  }
+  SWR.render([{on:true, amount:1, p:{...DEF, ...lk.p, grain:0, vig:0}}]);
+  const gl = SWR.gl, px = new Uint8Array(48*4*4); gl.readPixels(0, 0, 48, 4, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  let r = 0, g = 0, b = 0; for(let i = 0; i < px.length; i += 4){ r += px[i]; g += px[i+1]; b += px[i+2]; }
+  const n = px.length/4; r /= n; g /= n; b /= n;
+  const l = .2126*r + .7152*g + .0722*b, k = 2.4;            // exaggerate the tint so families read apart
+  const c = [r, g, b].map(v => Math.round(Math.max(0, Math.min(255, l + (v - l)*k))));
+  return swatchCache[lk.key] = {css:`rgb(${c[0]},${c[1]},${c[2]})`, dark: l < 150};
+}
+const SLIDERS_ICON = '<svg viewBox="0 0 24 24"><path d="M6 4v6M6 14v6M12 4v2M12 10v10M18 4v10M18 18v2"/><circle cx="6" cy="12" r="2"/><circle cx="12" cy="8" r="2"/><circle cx="18" cy="16" r="2"/></svg>';
+function buildSwatches(fam){
+  const box = $("#swatches"); box.replaceChildren();
+  const L = colorTarget();
+  fam.vars.forEach((_, i) => {
+    const lk = lookByKey(fam.key + (i+1)), sw = swatchColor(lk);
+    const b = document.createElement("button"); b.className = "swc";
+    b.style.background = sw.css; b.style.color = sw.dark ? "rgba(255,255,255,.95)" : "rgba(20,18,16,.9)";
+    const on = !!L && L.look === lk.key; b.setAttribute("aria-pressed", on);
+    b.setAttribute("aria-label", lk.name);
+    b.innerHTML = SLIDERS_ICON; const sp = document.createElement("span"); sp.textContent = lk.code; b.append(sp);
+    b.onclick = () => { if(on && S.pro){ openTab("adjust"); return; } applyLook(lk.key); };
+    box.append(b);
+  });
 }
 function buildStrip(){
   const box = $("#strip"); box.replaceChildren();
   $("#p-looks .amount").hidden = S.cat === "Setups";
+  const fam = famByName(S.cat);
+  $("#swatches").hidden = !fam; box.hidden = !!fam;
+  if(fam){ buildSwatches(fam); return; }
   if(S.cat === "Setups"){
     for(const st of setups){
       const wrap = document.createElement("div"); wrap.className = "lw";
@@ -1454,7 +1543,8 @@ function applyLook(key){
   if(!L){ L = mkLayer(key, 1); S.layers.splice(firstTextIdx(), 0, L); }
   else { L.look = lk.key; L.name = lk.name; L.p = {...DEF, ...lk.p}; }
   S.sel = L.id;
-  document.querySelectorAll(".look").forEach(b => b.setAttribute("aria-pressed", b.querySelector("canvas").dataset.key === key));
+  if(famByName(S.cat)) buildSwatches(famByName(S.cat));
+  else document.querySelectorAll("#strip .look").forEach(b => { const c = b.querySelector("canvas"); if(c) b.setAttribute("aria-pressed", c.dataset.key === key); });
   changed(false); syncAmount();
 }
 let syncAmount = function(){
@@ -1536,7 +1626,7 @@ const CTLS = [
   ["exposure","Belichtung",-2,2,.01],["contrast","Kontrast",-1,1,.01],["highlights","Lichter",-1,1,.01],["shadows","Tiefen",-1,1,.01],
   ["black","Schwarzwert",0,.3,.005],["white","Weißpunkt",.6,1.4,.01],["mid","Mitteltöne",.5,2,.01],
   ["h","Farbe"],
-  ["temp","Temperatur",-1,1,.01],["tint","Tönung",-1,1,.01],["saturation","Sättigung",0,2,.01],["vibrance","Dynamik",-1,1,.01],["hue","Farbton",-180,180,1],
+  ["temp","Temperatur",-1,1,.01],["tint","Tönung",-1,1,.01],["saturation","Sättigung",0,2,.01],["vibrance","Dynamik",-1,1,.01],["hue","Farbton",-180,180,1],["gSat","Grün-Sättigung",0,2,.01],["bSat","Blau-Sättigung",0,2,.01],
   ["h","Split-Toning"],
   ["shCol","Tiefen-Farbe","color"],["shAmt","Tiefen-Stärke",0,1,.01],["hiCol","Lichter-Farbe","color"],["hiAmt","Lichter-Stärke",0,1,.01],["balance","Balance",-1,1,.01],
   ["h","Film"],

@@ -1,5 +1,5 @@
 // Offline cache: app shell first, fonts cached as they are used.
-const CACHE = "lichtwerk-v6";
+const CACHE = "lichtwerk-v7";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png",
   ...["sonne","flare","leck","prisma","nebel","dunst","rauch","staub","regen","schnee"].flatMap(n => [`overlays/${n}.jpg`, `overlays/${n}-thumb.jpg`])];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
