@@ -706,6 +706,7 @@ function buildLightTab(){
   const more = document.createElement("button"); more.className = "btn"; more.textContent = "Alle Optionen";
   more.onclick = () => openTab("adjust"); more.classList.add("pro-only");
   bar.append(fl, nb, more); box.append(bar);
+  subjectButtons(box, L, false);
 }
 function buildLightControls(box, L){
   const p = L.p;
@@ -1005,6 +1006,7 @@ function buildTextTab(){
   const more = document.createElement("button"); more.className = "btn"; more.textContent = "Alle Optionen";
   more.onclick = () => openTab("adjust"); more.classList.add("pro-only");
   bar.append(nb, more); box.append(bar);
+  subjectButtons(box, L, false);
 }
 
 function buildTextControls(box, L){
@@ -1138,6 +1140,9 @@ function buildMaskTab(){
   const b = document.createElement("b"); b.textContent = kindOf(L) === "text" ? textLabel(L) : L.name; head.append(b);
   head.append(mk ? "" : " · noch keine Maske, die Ebene wirkt überall");
   box.append(head);
+  groupHead(box, "Motiv erkennen (KI)");
+  subjectButtons(box, L, true);
+  groupHead(box, "Pinsel");
   const tool = {v: S.brush.erase ? "erase" : "paint"};
   const seg = document.createElement("div"); seg.className = "seg";
   for(const [v, n] of [["erase","Wegwischen"],["paint","Zurückholen"]]){
@@ -1169,6 +1174,124 @@ function buildMaskTab(){
   const rb = document.createElement("button"); rb.className = "btn"; rb.textContent = "Maske entfernen"; rb.disabled = !mk;
   rb.onclick = () => { delete S.masks[L.id]; draw(); buildMaskTab(); };
   bar.append(ub, ib, rb); box.append(bar);
+}
+
+/* ---------- Motiv-Erkennung (Pro, KI im Browser) ---------- */
+const MP_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+const SEG_MODELS = {
+  person:{name:"Person", size:"16 MB", url:"https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite"},
+  objekt:{name:"Objekt", size:"3 MB", url:"https://storage.googleapis.com/mediapipe-models/image_segmenter/deeplab_v3/float32/1/deeplab_v3.tflite"},
+};
+const segCache = {}; let visionP = null;
+async function getSegmenter(kind){
+  if(segCache[kind]) return segCache[kind];
+  if(!visionP) visionP = (async () => {
+    const v = await import(MP_BASE + "/vision_bundle.mjs");
+    const fs = await v.FilesetResolver.forVisionTasks(MP_BASE + "/wasm");
+    return {v, fs};
+  })().catch(e => { visionP = null; throw e; });
+  const {v, fs} = await visionP;
+  const make = delegate => v.ImageSegmenter.createFromOptions(fs, {
+    baseOptions:{modelAssetPath:SEG_MODELS[kind].url, delegate}, runningMode:"IMAGE", outputCategoryMask:false, outputConfidenceMasks:true});
+  let seg;
+  try { seg = await make("GPU"); } catch { seg = await make("CPU"); }
+  return segCache[kind] = seg;
+}
+function boxMean(src, w, h, r){
+  const tmp = new Float32Array(w*h), out = new Float32Array(w*h);
+  for(let y = 0; y < h; y++){
+    const o = y*w; let s = 0;
+    for(let x = 0; x <= Math.min(r, w-1); x++) s += src[o+x];
+    for(let x = 0; x < w; x++){
+      tmp[o+x] = s / (Math.min(w-1, x+r) - Math.max(0, x-r) + 1);
+      if(x+r+1 < w) s += src[o+x+r+1]; if(x-r >= 0) s -= src[o+x-r];
+    }
+  }
+  for(let x = 0; x < w; x++){
+    let s = 0;
+    for(let y = 0; y <= Math.min(r, h-1); y++) s += tmp[y*w+x];
+    for(let y = 0; y < h; y++){
+      out[y*w+x] = s / (Math.min(h-1, y+r) - Math.max(0, y-r) + 1);
+      if(y+r+1 < h) s += tmp[(y+r+1)*w+x]; if(y-r >= 0) s -= tmp[(y-r)*w+x];
+    }
+  }
+  return out;
+}
+function guidedFilter(I, p, w, h, r, eps){
+  const n = w*h, Ip = new Float32Array(n), II = new Float32Array(n);
+  for(let i = 0; i < n; i++){ Ip[i] = I[i]*p[i]; II[i] = I[i]*I[i]; }
+  const mI = boxMean(I, w, h, r), mp = boxMean(p, w, h, r), mIp = boxMean(Ip, w, h, r), mII = boxMean(II, w, h, r);
+  const a = new Float32Array(n), b = new Float32Array(n);
+  for(let i = 0; i < n; i++){ const v = mII[i] - mI[i]*mI[i]; a[i] = (mIp[i] - mI[i]*mp[i]) / (v + eps); b[i] = mp[i] - a[i]*mI[i]; }
+  const ma = boxMean(a, w, h, r), mb = boxMean(b, w, h, r), q = new Float32Array(n);
+  for(let i = 0; i < n; i++) q[i] = ma[i]*I[i] + mb[i];
+  return q;
+}
+async function subjectMap(kind){
+  if(S.subject && S.subject.kind === kind && S.subject.src === S.source) return S.subject;
+  const seg = await getSegmenter(kind);
+  const res = seg.segment(scaled(1024));
+  const bg = res.confidenceMasks[0], mw = bg.width, mh = bg.height, bgd = bg.getAsFloat32Array();
+  const sc = document.createElement("canvas"); sc.width = mw; sc.height = mh;
+  const sx = sc.getContext("2d"), id = sx.createImageData(mw, mh);
+  let peak = 0;
+  for(let i = 0; i < mw*mh; i++){ const pr = 1 - bgd[i]; peak = Math.max(peak, pr); id.data[i*4] = id.data[i*4+1] = id.data[i*4+2] = 255; id.data[i*4+3] = Math.round(pr*255); }
+  if(res.close) res.close();
+  sx.putImageData(id, 0, 0);
+  const k = 1024 / Math.max(srcW(), srcH()), w = Math.max(1, Math.round(srcW()*k)), h = Math.max(1, Math.round(srcH()*k));
+  const uc = document.createElement("canvas"); uc.width = w; uc.height = h;
+  const ux = uc.getContext("2d", {willReadFrequently:true}); ux.imageSmoothingQuality = "high";
+  ux.drawImage(sc, 0, 0, w, h);
+  const up = ux.getImageData(0, 0, w, h).data, P = new Float32Array(w*h);
+  for(let i = 0; i < w*h; i++) P[i] = up[i*4+3] / 255;
+  ux.clearRect(0, 0, w, h); ux.drawImage(S.source, 0, 0, w, h);
+  const g = ux.getImageData(0, 0, w, h).data, I = new Float32Array(w*h);
+  for(let i = 0; i < w*h; i++) I[i] = (g[i*4]*.299 + g[i*4+1]*.587 + g[i*4+2]*.114) / 255;
+  const q = guidedFilter(I, P, w, h, Math.max(3, Math.round(Math.max(w, h)/140)), 2e-3);
+  for(let i = 0; i < q.length; i++) q[i] = Math.min(1, Math.max(0, (q[i] - .5)*1.35 + .5));
+  return S.subject = {kind, src:S.source, w, h, data:q, peak};
+}
+async function applySubject(L, behind){
+  if(!L || S.segBusy) return;
+  const kind = S.segKind || "person";
+  S.segBusy = true; refreshUI();
+  const first = !segCache[kind];
+  toast(first ? `KI-Modell „${SEG_MODELS[kind].name}“ wird geladen (einmalig, ca. ${SEG_MODELS[kind].size}) …` : "Motiv wird erkannt …");
+  let sm;
+  try { sm = await subjectMap(kind); }
+  catch(e){
+    S.segBusy = false; refreshUI();
+    toast(inFrame ? "Die Motiv-Erkennung funktioniert nur in der App-Version: descentz111.github.io/lichtwerk" : "Motiv-Erkennung fehlgeschlagen. Beim ersten Mal braucht sie Internet, um das Modell zu laden.");
+    return;
+  }
+  S.segBusy = false;
+  if(sm.peak < .35){ refreshUI(); toast(`Kein Motiv gefunden. Probier es mit „${kind === "person" ? "Objekt" : "Person"}“.`); return; }
+  const mk = ensureMask(L); pushMaskUndo(mk);
+  const x = mk.c.getContext("2d", {willReadFrequently:true});
+  const t = document.createElement("canvas"); t.width = sm.w; t.height = sm.h;
+  const tx = t.getContext("2d"), im = tx.createImageData(sm.w, sm.h);
+  for(let i = 0; i < sm.data.length; i++){ const a = behind ? 1 - sm.data[i] : sm.data[i]; im.data[i*4] = im.data[i*4+1] = im.data[i*4+2] = 255; im.data[i*4+3] = Math.round(a*255); }
+  tx.putImageData(im, 0, 0);
+  x.clearRect(0, 0, mk.c.width, mk.c.height); x.drawImage(t, 0, 0, mk.c.width, mk.c.height);
+  mk.ver++; draw(); refreshUI();
+  toast(behind ? "Die Ebene liegt jetzt hinter dem Motiv. Mit dem Pinsel im Tab Maske kannst du nachbessern." : "Die Ebene wirkt jetzt nur auf dem Motiv.");
+}
+function subjectButtons(box, L, withOnly){
+  const bar = document.createElement("div"); bar.className = "bar pro-only";
+  const seg = document.createElement("div"); seg.className = "seg"; seg.style.flex = "1 1 100%";
+  for(const [k, n] of [["person","Person"],["objekt","Objekt / Tier"]]){
+    const bt = document.createElement("button"); bt.textContent = n; bt.setAttribute("aria-pressed", (S.segKind || "person") === k);
+    bt.onclick = () => { S.segKind = k; seg.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === bt)); };
+    seg.append(bt);
+  }
+  const b1 = document.createElement("button"); b1.className = "btn primary"; b1.textContent = S.segBusy ? "Erkenne Motiv …" : "Hinter das Motiv legen";
+  b1.disabled = !!S.segBusy; b1.onclick = () => applySubject(L, true);
+  bar.append(seg, b1);
+  if(withOnly){
+    const b2 = document.createElement("button"); b2.className = "btn"; b2.textContent = "Nur auf das Motiv";
+    b2.disabled = !!S.segBusy; b2.onclick = () => applySubject(L, false); bar.append(b2);
+  }
+  box.append(bar);
 }
 
 /* ---------- Setups (ganzer Ebenen-Stapel) ---------- */
@@ -1514,7 +1637,7 @@ $("#file").onchange = async e => {
   img.src = url;
   try { await img.decode(); }
   catch { toast("Dieses Bildformat kann der Browser nicht öffnen. Versuch es mit JPEG oder PNG."); return; }
-  S.source = img; S.isDemo = false; S.fileName = f.name.replace(/\.[^.]+$/,"") || "foto"; S.masks = {};
+  S.source = img; S.isDemo = false; S.fileName = f.name.replace(/\.[^.]+$/,"") || "foto"; S.masks = {}; S.subject = null;
   $("#hint").hidden = true;
   setupPreview(); prepareThumbSource(); refreshUI();
 };
