@@ -39,7 +39,18 @@ button{cursor:pointer}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 header{display:flex;align-items:center;gap:4px;padding-block:6px;padding-left:var(--gutter-l);padding-right:var(--gutter-r);min-height:44px}
-.brand{font-family:var(--display);font-weight:700;font-size:17px;letter-spacing:-.02em;margin-right:auto}
+.brand{font-family:var(--display);font-weight:700;font-size:17px;letter-spacing:-.02em}
+.mode{display:flex;padding:2px;border-radius:9px;background:rgba(118,118,128,.24);margin:0 auto 0 8px}
+.mode button{height:28px;padding:0 11px;border:0;border-radius:7px;background:transparent;font-size:13px;font-weight:600;color:var(--muted)}
+.mode button[aria-pressed="true"]{background:#636366;color:var(--fg)}
+.mode button[data-m="pro"][aria-pressed="true"]{background:var(--accent);color:#fff}
+body:not(.pro) .pro-only{display:none!important}
+.qm{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:4px}
+.qm button{height:56px;border:0;border-radius:10px;background:var(--raise);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:11px;color:var(--muted);padding:0}
+.qm button i{display:block;width:26px;height:18px;border-radius:4px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.15)}
+.maskfor{font-size:13px;color:var(--muted);margin:2px 0 8px}
+.maskfor b{color:var(--fg);font-weight:600}
+@media (max-width:420px){ .brand{display:none} .mode{margin-left:0} }
 .btn{height:34px;min-width:34px;padding:0 14px;border-radius:17px;border:0;background:var(--raise);
   display:inline-flex;align-items:center;justify-content:center;gap:6px;font-weight:500;font-size:15px;white-space:nowrap;text-decoration:none}
 .btn:active{opacity:.6}
@@ -153,6 +164,7 @@ input[type=range]:disabled{opacity:.3}
 <div id="app">
   <header>
     <div class="brand">Lichtwerk</div>
+    <div class="mode" id="mode" role="group" aria-label="Modus"><button data-m="fast">Fast</button><button data-m="pro">Pro</button></div>
     <button class="btn icon" id="undo" aria-label="Rückgängig"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
     <button class="btn icon" id="redo" aria-label="Wiederholen"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
     <button class="btn icon" id="open" aria-label="Foto öffnen"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-8 8"/></svg></button>
@@ -171,7 +183,8 @@ input[type=range]:disabled{opacity:.3}
       <button class="tab" role="tab" data-tab="light" aria-selected="false">Licht</button>
       <button class="tab" role="tab" data-tab="text" aria-selected="false">Text</button>
       <button class="tab" role="tab" data-tab="layers" aria-selected="false">Ebenen</button>
-      <button class="tab" role="tab" data-tab="adjust" aria-selected="false">Feinschliff</button>
+      <button class="tab pro-only" role="tab" data-tab="adjust" aria-selected="false">Regler</button>
+      <button class="tab pro-only" role="tab" data-tab="mask" aria-selected="false">Maske</button>
     </div>
     <div class="pane" id="p-looks">
       <div class="amount"><label for="amt">Stärke</label><input type="range" id="amt" min="0" max="1" step="0.01"><output id="amtOut"></output></div>
@@ -191,6 +204,7 @@ input[type=range]:disabled{opacity:.3}
       </div>
     </div>
     <div class="pane" id="p-adjust" hidden></div>
+    <div class="pane" id="p-mask" hidden></div>
   </section>
 </div>
 
@@ -279,7 +293,7 @@ precision highp float;
 precision mediump float;
 #endif
 varying vec2 v;
-uniform sampler2D src; uniform sampler2D lut;
+uniform sampler2D src; uniform sampler2D lut; uniform sampler2D mask; uniform float uHasMask;
 uniform vec2 uRes;
 uniform float uAmount,uExp,uCon,uSat,uVib,uTemp,uTint,uHue,uBlack,uMid,uWhite,uSh,uHi,uFade,uShA,uHiA,uBal,uLutA,uLutN,uGrain,uVig;
 uniform vec3 uShC,uHiC;
@@ -314,7 +328,8 @@ void main(){
   if(uVig>0.){vec2 a=vec2(uRes.x/uRes.y,1.);float r=length((v-.5)*a)/length(a*.5);c*=1.-uVig*.85*smoothstep(.35,1.05,r);}
   if(uGrain>0.){float sc=max(1.,uRes.y/1100.);vec2 px=floor(v*uRes/sc);float n=hash(px)+hash(px+vec2(17.,3.))-1.;
     c+=n*uGrain*.16*(1.-abs(luma(c)-.5));}
-  gl_FragColor=vec4(mix(o.rgb,clamp(c,0.,1.),uAmount),1.);
+  float m = uHasMask > .5 ? texture2D(mask,v).a : 1.;
+  gl_FragColor=vec4(mix(o.rgb,clamp(c,0.,1.),uAmount*m),1.);
 }`;
 
 const hex3 = h => { const n = parseInt(h.slice(1),16); return [(n>>16&255)/255,(n>>8&255)/255,(n&255)/255]; };
@@ -334,7 +349,7 @@ class Renderer {
     const a = gl.getAttribLocation(pr,"p"); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
     this.u = {}; const n = gl.getProgramParameter(pr,gl.ACTIVE_UNIFORMS);
     for(let i=0;i<n;i++){ const nm = gl.getActiveUniform(pr,i).name; this.u[nm] = gl.getUniformLocation(pr,nm); }
-    gl.uniform1i(this.u.src,0); gl.uniform1i(this.u.lut,1);
+    gl.uniform1i(this.u.src,0); gl.uniform1i(this.u.lut,1); gl.uniform1i(this.u.mask,2); this.masks = new Map();
     this.src = this.tex(); this.blank = this.tex();
     gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,1,1,0,gl.RGB,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0]));
     this.fb = [0,1].map(() => ({t:this.tex(), f:gl.createFramebuffer()}));
@@ -367,7 +382,18 @@ class Renderer {
     gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,L.size*L.size,L.size,0,gl.RGB,gl.UNSIGNED_BYTE,L.data);
     const e = {t, size:L.size}; this.luts.set(key,e); return e;
   }
-  render(layers){
+  maskTex(mk){
+    const gl = this.gl; let e = this.masks.get(mk);
+    if(!e){ e = {t:this.tex(), ver:-1}; this.masks.set(mk, e); }
+    gl.bindTexture(gl.TEXTURE_2D, e.t);
+    if(e.ver !== mk.ver){
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,mk.c);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false); e.ver = mk.ver;
+    }
+    return e.t;
+  }
+  render(layers, masks){
     const gl = this.gl, u = this.u;
     let act = layers.filter(l => l.on && (l.kind || "color") === "color");
     if(!act.length) act = [{amount:0,p:DEF}];
@@ -379,6 +405,10 @@ class Renderer {
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,input);
       const lt = this.lutTex(p.lut);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,lt ? lt.t : this.blank);
+      const mk = masks && L.id ? masks[L.id] : null;
+      gl.activeTexture(gl.TEXTURE2);
+      if(mk) this.maskTex(mk); else gl.bindTexture(gl.TEXTURE_2D,this.blank);
+      gl.uniform1f(u.uHasMask, mk ? 1 : 0);
       gl.uniform2f(u.uRes,this.W,this.H);
       const f = (n,x) => gl.uniform1f(u[n],x);
       f("uAmount",L.amount); f("uExp",p.exposure); f("uCon",p.contrast); f("uSat",p.saturation); f("uVib",p.vibrance);
@@ -403,8 +433,10 @@ const S = {
   source:null, isDemo:true, fileName:"lichtwerk",
   layers:[mkLayer("tealorange",.85)], sel:null,
   cat:"Alle", tab:"looks", showOrig:false,
-  undo:[], redo:[], last:null
+  undo:[], redo:[], last:null,
+  masks:{}, pro:false, brush:{erase:true, size:12, soft:.6, flow:.6, show:true}, brushAt:null
 };
+try { S.pro = localStorage.getItem("lichtwerk.mode") === "pro"; } catch {}
 S.sel = S.layers[0].id;
 const selLayer = () => S.layers.find(l => l.id === S.sel) || null;
 const kindOf = l => l.kind || "color";
@@ -477,6 +509,13 @@ const pinchInfo = () => { const [a,b] = [...ptrs.values()]; return {d:Math.hypot
 cv.addEventListener("pointerdown", e => {
   e.preventDefault(); try { cv.setPointerCapture(e.pointerId); } catch {}
   ptrs.set(e.pointerId, toCanvas(e));
+  if(S.pro && S.tab === "mask" && selLayer()){
+    if(ptrs.size === 1){
+      const pt = ptrs.get(e.pointerId), mk = ensureMask(selLayer()); pushMaskUndo(mk);
+      gesture = {type:"mask", mk, last:pt}; S.brushAt = pt; maskStroke(mk, pt, pt); draw();
+    } else gesture = null;
+    return;
+  }
   if(ptrs.size === 1){
     const [px,py] = ptrs.get(e.pointerId), hit = hitText(px, py);
     if(hit){
@@ -496,7 +535,11 @@ cv.addEventListener("pointerdown", e => {
 cv.addEventListener("pointermove", e => {
   if(!ptrs.has(e.pointerId)) return;
   ptrs.set(e.pointerId, toCanvas(e));
+  if(S.pro && S.tab === "mask" && e.pointerType === "mouse" && !gesture){ S.brushAt = ptrs.get(e.pointerId); draw(); }
   if(!gesture) return;
+  if(gesture.type === "mask"){
+    const pt = ptrs.get(e.pointerId); maskStroke(gesture.mk, gesture.last, pt); gesture.last = pt; S.brushAt = pt; draw(); return;
+  }
   if(gesture.type === "move" && ptrs.size === 1){
     const [px,py] = ptrs.get(e.pointerId), L = gesture.L;
     L.p.x = clamp(gesture.ox + (px-gesture.sx)/cv.width, -.5, 1.5);
@@ -516,6 +559,7 @@ const endPtr = e => {
   ptrs.delete(e.pointerId);
   if(!ptrs.size){
     if(gesture && gesture.type === "orig") setOrig(false);
+    else if(gesture && gesture.type === "mask"){ S.brushAt = null; draw(); buildMaskTab(); if(S.tab === "layers") buildLayers(); }
     else if(gesture && S.tab === "adjust") refreshUI();
     gesture = null;
   } else if(gesture && gesture.type === "pinch") gesture = null;
@@ -568,6 +612,8 @@ function renderLight(dst, L, W, H, which = "src"){
   x.save(); x.translate(p.x*W, p.y*H); x.rotate(p.angle*Math.PI/180); if(p.flip) x.scale(-1, 1);
   x.imageSmoothingQuality = "high"; x.drawImage(img, -side/2, -side/2, side, side); x.restore();
   if((p.color || "#ffffff").toLowerCase() !== "#ffffff"){ x.globalCompositeOperation = "multiply"; x.fillStyle = p.color; x.fillRect(0, 0, W, H); x.globalCompositeOperation = "source-over"; }
+  const mk = L.id && S.masks[L.id];
+  if(mk){ x.globalCompositeOperation = "destination-in"; x.drawImage(mk.c, 0, 0, W, H); x.globalCompositeOperation = "source-over"; }
   dst.save(); dst.globalAlpha = L.amount; dst.globalCompositeOperation = p.blend || "screen"; dst.drawImage(c, 0, 0); dst.restore();
 }
 function drawLights(x, W, H){ for(const L of S.layers) if(L.on && kindOf(L) === "light") renderLight(x, L, W, H); }
@@ -610,7 +656,7 @@ function buildLightTab(){
   const nb = document.createElement("button"); nb.className = "btn"; nb.textContent = "+ Weiteres Overlay";
   nb.onclick = () => applyLight(L.style || "sonne", true);
   const more = document.createElement("button"); more.className = "btn"; more.textContent = "Alle Optionen";
-  more.onclick = () => openTab("adjust");
+  more.onclick = () => openTab("adjust"); more.classList.add("pro-only");
   bar.append(fl, nb, more); box.append(bar);
 }
 function buildLightControls(box, L){
@@ -724,7 +770,19 @@ function drawText(x, L, W, H){
   pass();
   x.restore();
 }
-function drawTexts(x, W, H){ for(const L of S.layers) if(L.on && kindOf(L) === "text") drawText(x, L, W, H); }
+function drawTexts(x, W, H){
+  for(const L of S.layers){
+    if(!L.on || kindOf(L) !== "text") continue;
+    const mk = S.masks[L.id];
+    if(!mk){ drawText(x, L, W, H); continue; }
+    const c = tmp("textmask", W, H), t = c.getContext("2d");
+    const blend = L.p.blend, amt = L.amount;
+    L.p.blend = "source-over"; L.amount = 1;
+    try { drawText(t, L, W, H); } finally { L.p.blend = blend; L.amount = amt; }
+    t.globalCompositeOperation = "destination-in"; t.drawImage(mk.c, 0, 0, W, H); t.globalCompositeOperation = "source-over";
+    x.save(); x.globalAlpha = amt; x.globalCompositeOperation = blend || "source-over"; x.drawImage(c, 0, 0); x.restore();
+  }
+}
 function hitText(px, py){
   for(let i = S.layers.length-1; i >= 0; i--){
     const L = S.layers[i]; if(!L.on || kindOf(L) !== "text") continue;
@@ -736,12 +794,13 @@ function hitText(px, py){
   return null;
 }
 function paint(){
-  R.render(S.showOrig ? [] : S.layers);
+  R.render(S.showOrig ? [] : S.layers, S.masks);
   cx.globalCompositeOperation = "source-over"; cx.globalAlpha = 1;
   cx.drawImage(R.c, 0, 0);
   if(S.showOrig) return;
   drawLights(cx, R.W, R.H);
   drawTexts(cx, R.W, R.H);
+  if(S.pro && S.tab === "mask") paintMaskOverlay();
   const SL = selLayer();
   if(SL && SL.on && kindOf(SL) === "light"){
     const k = cv.width / (cv.clientWidth || cv.width), m = 14*k;
@@ -895,7 +954,7 @@ function buildTextTab(){
   const nb = document.createElement("button"); nb.className = "btn"; nb.textContent = "+ Weiterer Text";
   nb.onclick = () => applyTextStyle(L.style || "worksans", true);
   const more = document.createElement("button"); more.className = "btn"; more.textContent = "Alle Optionen";
-  more.onclick = () => openTab("adjust");
+  more.onclick = () => openTab("adjust"); more.classList.add("pro-only");
   bar.append(nb, more); box.append(bar);
 }
 
@@ -930,6 +989,148 @@ function buildTextControls(box, L){
   rangeCtl(box, L.p, "plateAlpha", "Deckkraft", 0, 1, .01, TDEF.plateAlpha, v => Math.round(v*100) + "%");
 }
 
+/* ---------- Masks (Pro) ---------- */
+function ensureMask(L){
+  let mk = S.masks[L.id];
+  if(!mk){
+    const w = srcW(), h = srcH(), k = 1024 / Math.max(w, h);
+    const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(w*k)); c.height = Math.max(1, Math.round(h*k));
+    const x = c.getContext("2d", {willReadFrequently:true}); x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height);
+    mk = S.masks[L.id] = {c, ver:1, undo:[]};
+  }
+  return mk;
+}
+function pushMaskUndo(mk){
+  const x = mk.c.getContext("2d", {willReadFrequently:true});
+  mk.undo.push(x.getImageData(0, 0, mk.c.width, mk.c.height)); if(mk.undo.length > 12) mk.undo.shift();
+}
+function stampMask(mk, mx, my){
+  const x = mk.c.getContext("2d"), b = S.brush;
+  const r = Math.max(1, b.size/100 * Math.min(mk.c.width, mk.c.height) / 2);
+  const g = x.createRadialGradient(mx, my, r*(1-b.soft)*.98, mx, my, r);
+  g.addColorStop(0, `rgba(255,255,255,${b.flow})`); g.addColorStop(1, "rgba(255,255,255,0)");
+  x.globalCompositeOperation = b.erase ? "destination-out" : "source-over";
+  x.fillStyle = g; x.beginPath(); x.arc(mx, my, r, 0, 7); x.fill();
+  x.globalCompositeOperation = "source-over";
+  return r;
+}
+function maskStroke(mk, from, to){
+  const sx = mk.c.width / cv.width, sy = mk.c.height / cv.height;
+  const ax = from[0]*sx, ay = from[1]*sy, bx = to[0]*sx, by = to[1]*sy;
+  const r = Math.max(1, S.brush.size/100 * Math.min(mk.c.width, mk.c.height) / 2);
+  const step = Math.max(1, r*.18), n = Math.max(1, Math.ceil(Math.hypot(bx-ax, by-ay) / step));
+  for(let i = 1; i <= n; i++) stampMask(mk, ax + (bx-ax)*i/n, ay + (by-ay)*i/n);
+  mk.ver++;
+}
+function paintMaskOverlay(){
+  const L = selLayer(); if(!L) return;
+  const mk = S.masks[L.id], W = cv.width, H = cv.height, k = W / (cv.clientWidth || W);
+  if(mk && S.brush.show){
+    const c = tmp("maskview", W, H), x = c.getContext("2d");
+    x.fillStyle = "rgba(255,59,48,.42)"; x.fillRect(0, 0, W, H);
+    x.globalCompositeOperation = "destination-out"; x.drawImage(mk.c, 0, 0, W, H); x.globalCompositeOperation = "source-over";
+    cx.drawImage(c, 0, 0);
+  }
+  if(S.brushAt){
+    const r = S.brush.size/100 * Math.min(W, H) / 2;
+    cx.save(); cx.lineWidth = 1.5*k; cx.strokeStyle = "rgba(255,255,255,.95)"; cx.shadowColor = "rgba(0,0,0,.6)"; cx.shadowBlur = 3*k;
+    cx.beginPath(); cx.arc(S.brushAt[0], S.brushAt[1], r, 0, 7); cx.stroke();
+    if(S.brush.soft > .05){ cx.setLineDash([4*k, 4*k]); cx.beginPath(); cx.arc(S.brushAt[0], S.brushAt[1], r*(1-S.brush.soft), 0, 7); cx.stroke(); }
+    cx.restore();
+  }
+}
+function quickMask(kind){
+  const L = selLayer(); if(!L) return;
+  const mk = ensureMask(L); pushMaskUndo(mk);
+  const c = mk.c, x = c.getContext("2d", {willReadFrequently:true}), w = c.width, h = c.height;
+  const white = a => `rgba(255,255,255,${a})`;
+  x.globalCompositeOperation = "source-over"; x.clearRect(0, 0, w, h);
+  const lin = (x0, y0, x1, y1) => { const g = x.createLinearGradient(x0, y0, x1, y1); g.addColorStop(0, white(1)); g.addColorStop(.3, white(1)); g.addColorStop(1, white(0)); x.fillStyle = g; x.fillRect(0, 0, w, h); };
+  const rad = (inner, outer, inv) => { const d = Math.hypot(w, h)/2, g = x.createRadialGradient(w/2, h/2, d*inner, w/2, h/2, d*outer);
+    g.addColorStop(0, white(inv ? 0 : 1)); g.addColorStop(1, white(inv ? 1 : 0)); x.fillStyle = g; x.fillRect(0, 0, w, h); };
+  if(kind === "top") lin(0, 0, 0, h*.8);
+  else if(kind === "bottom") lin(0, h, 0, h*.2);
+  else if(kind === "left") lin(0, 0, w*.8, 0);
+  else if(kind === "right") lin(w, 0, w*.2, 0);
+  else if(kind === "center") rad(.15, .85, false);
+  else if(kind === "edge") rad(.3, 1, true);
+  else if(kind === "hi" || kind === "lo"){
+    const t = document.createElement("canvas"); t.width = w; t.height = h;
+    const tx = t.getContext("2d", {willReadFrequently:true}); tx.drawImage(S.source, 0, 0, w, h);
+    const src = tx.getImageData(0, 0, w, h), out = x.createImageData(w, h), d = src.data, o = out.data;
+    const sm = (a, b, v) => { const q = Math.min(1, Math.max(0, (v-a)/(b-a))); return q*q*(3-2*q); };
+    for(let i = 0; i < d.length; i += 4){
+      const l = (d[i]*.2126 + d[i+1]*.7152 + d[i+2]*.0722) / 255;
+      const a = kind === "hi" ? sm(.42, .82, l) : 1 - sm(.18, .58, l);
+      o[i] = o[i+1] = o[i+2] = 255; o[i+3] = Math.round(a*255);
+    }
+    x.putImageData(out, 0, 0);
+  }
+  mk.ver++; draw(); buildMaskTab();
+}
+function invertMask(){
+  const L = selLayer(); if(!L) return;
+  const mk = ensureMask(L); pushMaskUndo(mk);
+  const x = mk.c.getContext("2d", {willReadFrequently:true}), im = x.getImageData(0, 0, mk.c.width, mk.c.height), d = im.data;
+  for(let i = 0; i < d.length; i += 4){ d[i] = d[i+1] = d[i+2] = 255; d[i+3] = 255 - d[i+3]; }
+  x.putImageData(im, 0, 0); mk.ver++; draw();
+}
+function undoMask(){
+  const L = selLayer(); const mk = L && S.masks[L.id]; if(!mk || !mk.undo.length) return;
+  mk.c.getContext("2d").putImageData(mk.undo.pop(), 0, 0); mk.ver++; draw(); buildMaskTab();
+}
+function buildMaskTab(){
+  const box = $("#p-mask"); if(!box) return; box.replaceChildren();
+  const L = selLayer();
+  if(!L){ const p = document.createElement("p"); p.className = "empty"; p.textContent = "Wähle zuerst unter Ebenen eine Ebene aus, deren Wirkung du begrenzen willst."; box.append(p); return; }
+  const mk = S.masks[L.id];
+  const head = document.createElement("div"); head.className = "maskfor";
+  head.append("Maske für ");
+  const b = document.createElement("b"); b.textContent = kindOf(L) === "text" ? textLabel(L) : L.name; head.append(b);
+  head.append(mk ? "" : " · noch keine Maske, die Ebene wirkt überall");
+  box.append(head);
+  const tool = {v: S.brush.erase ? "erase" : "paint"};
+  const seg = document.createElement("div"); seg.className = "seg";
+  for(const [v, n] of [["erase","Wegwischen"],["paint","Zurückholen"]]){
+    const bt = document.createElement("button"); bt.textContent = n; bt.setAttribute("aria-pressed", tool.v === v);
+    bt.onclick = () => { S.brush.erase = v === "erase"; seg.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === bt)); };
+    seg.append(bt);
+  }
+  box.append(seg);
+  const brushBox = document.createElement("div");
+  rangeCtl(brushBox, S.brush, "size", "Pinsel", 2, 50, .5, 12, v => Math.round(v) + "%");
+  rangeCtl(brushBox, S.brush, "soft", "Weichheit", 0, 1, .01, .6, v => Math.round(v*100) + "%");
+  rangeCtl(brushBox, S.brush, "flow", "Deckkraft", .05, 1, .01, .6, v => Math.round(v*100) + "%");
+  switchCtl(brushBox, S.brush, "show", "Maske zeigen");
+  box.append(brushBox);
+  groupHead(box, "Schnell-Masken");
+  const qm = document.createElement("div"); qm.className = "qm";
+  const Q = [["top","Oben","linear-gradient(#fff,transparent)"],["bottom","Unten","linear-gradient(transparent,#fff)"],
+    ["left","Links","linear-gradient(90deg,#fff,transparent)"],["right","Rechts","linear-gradient(90deg,transparent,#fff)"],
+    ["center","Mitte","radial-gradient(#fff,transparent 75%)"],["edge","Rand","radial-gradient(transparent 35%,#fff)"],
+    ["hi","Lichter","linear-gradient(90deg,#000,#fff)"],["lo","Tiefen","linear-gradient(90deg,#fff,#000)"]];
+  for(const [k, n, bg] of Q){
+    const bt = document.createElement("button"); const i = document.createElement("i"); i.style.background = bg;
+    bt.append(i, n); bt.setAttribute("aria-label", "Maske " + n); bt.onclick = () => quickMask(k); qm.append(bt);
+  }
+  box.append(qm);
+  const bar = document.createElement("div"); bar.className = "bar";
+  const ub = document.createElement("button"); ub.className = "btn"; ub.textContent = "Schritt zurück"; ub.disabled = !mk || !mk.undo.length; ub.onclick = undoMask;
+  const ib = document.createElement("button"); ib.className = "btn"; ib.textContent = "Invertieren"; ib.onclick = invertMask;
+  const rb = document.createElement("button"); rb.className = "btn"; rb.textContent = "Maske entfernen"; rb.disabled = !mk;
+  rb.onclick = () => { delete S.masks[L.id]; draw(); buildMaskTab(); };
+  bar.append(ub, ib, rb); box.append(bar);
+}
+
+/* ---------- Mode (Fast / Pro) ---------- */
+function setMode(pro){
+  S.pro = pro; document.body.classList.toggle("pro", pro);
+  try { localStorage.setItem("lichtwerk.mode", pro ? "pro" : "fast"); } catch {}
+  document.querySelectorAll("#mode button").forEach(b => b.setAttribute("aria-pressed", (b.dataset.m === "pro") === pro));
+  if(!pro && (S.tab === "adjust" || S.tab === "mask")) openTab("looks"); else draw();
+}
+document.querySelectorAll("#mode button").forEach(b => b.onclick = () => setMode(b.dataset.m === "pro"));
+
 /* ---------- Thumbnails ---------- */
 const thumbCanvas = document.createElement("canvas");
 const TR = new Renderer(thumbCanvas);
@@ -962,7 +1163,7 @@ function paintThumbs(){
 function openTab(name){
   S.tab = name;
   document.querySelectorAll(".tab").forEach(x => x.setAttribute("aria-selected", x.dataset.tab === name));
-  for(const k of ["looks","light","text","layers","adjust"]) $("#p-"+k).hidden = k !== name;
+  for(const k of ["looks","light","text","layers","adjust","mask"]) $("#p-"+k).hidden = k !== name;
   refreshUI(); draw();
 }
 document.querySelectorAll(".tab").forEach(t => t.onclick = () => openTab(t.dataset.tab));
@@ -1035,7 +1236,7 @@ function buildLayers(){
     const name = document.createElement("button"); name.className = "name";
     const isT = kindOf(L) === "text";
     name.innerHTML = ""; name.append(isT ? textLabel(L) : L.name);
-    const sm = document.createElement("small"); sm.textContent = `${{text:"Text", light:"Licht", color:"Farbe"}[kindOf(L)]} · ${Math.round(L.amount*100)} %`; name.append(sm);
+    const sm = document.createElement("small"); sm.textContent = `${{text:"Text", light:"Licht", color:"Farbe"}[kindOf(L)]} · ${Math.round(L.amount*100)} %${S.masks[L.id] ? " · Maske" : ""}`; name.append(sm);
     name.onclick = () => { S.sel = L.id; commit(); refreshUI(); draw(); };
     const acts = document.createElement("div"); acts.className = "acts";
     const up = btn(ICON.up, "Nach oben", () => move(i, 1)); up.disabled = i === S.layers.length-1 || kindOf(S.layers[i+1]) !== kindOf(L);
@@ -1064,6 +1265,8 @@ $("#addText").onclick = () => { openTab("text"); applyTextStyle("worksans", true
 $("#dupLayer").onclick = () => {
   const L = selLayer(); if(!L) return;
   const c = JSON.parse(JSON.stringify(L)); c.id = newId(); c.name = L.name + " Kopie";
+  const om = S.masks[L.id];
+  if(om){ const mc = document.createElement("canvas"); mc.width = om.c.width; mc.height = om.c.height; mc.getContext("2d").drawImage(om.c, 0, 0); S.masks[c.id] = {c:mc, ver:1, undo:[]}; }
   if(kindOf(c) === "text") c.p.y = Math.min(1, c.p.y + .06);
   S.layers.splice(S.layers.indexOf(L)+1, 0, c); S.sel = c.id; changed(true);
 };
@@ -1173,6 +1376,7 @@ function refreshUI(){
   if(S.tab === "light") buildLightTab();
   if(S.tab === "layers") buildLayers();
   if(S.tab === "adjust") buildAdjust();
+  if(S.tab === "mask") buildMaskTab();
 }
 
 /* ---------- Load photo ---------- */
@@ -1183,7 +1387,7 @@ $("#file").onchange = async e => {
   img.src = url;
   try { await img.decode(); }
   catch { toast("Dieses Bildformat kann der Browser nicht öffnen. Versuch es mit JPEG oder PNG."); return; }
-  S.source = img; S.isDemo = false; S.fileName = f.name.replace(/\.[^.]+$/,"") || "foto";
+  S.source = img; S.isDemo = false; S.fileName = f.name.replace(/\.[^.]+$/,"") || "foto"; S.masks = {};
   $("#hint").hidden = true;
   setupPreview(); prepareThumbSource(); refreshUI();
 };
@@ -1204,7 +1408,7 @@ async function runExport(){
   let r;
   try { await document.fonts.ready; } catch {}
   try {
-    r = new Renderer(gc); r.setSource(src); r.render(S.layers);
+    r = new Renderer(gc); r.setSource(src); r.render(S.layers, S.masks);
     oc.width = r.W; oc.height = r.H;
     const o = oc.getContext("2d"); o.drawImage(gc, 0, 0); drawLights(o, r.W, r.H); drawTexts(o, r.W, r.H);
   }
@@ -1287,6 +1491,7 @@ const _sync = syncAmount; syncAmount = function(){ _sync(); fillRange(amt); };
 
 /* ---------- Start ---------- */
 S.source = demoImage();
+setMode(S.pro);
 setupPreview(); prepareThumbSource(); refreshUI(); updateHistBtns();
 })();
 </script>
