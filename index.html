@@ -506,6 +506,7 @@ const colorTarget = () => { const L = selLayer(); if(L && kindOf(L) === "color")
   for(let i = S.layers.length-1; i >= 0; i--) if(kindOf(S.layers[i]) === "color") return S.layers[i]; return null; };
 const firstTextIdx = () => { const i = S.layers.findIndex(l => kindOf(l) !== "color"); return i < 0 ? S.layers.length : i; };
 const lightInsertIdx = () => { const i = S.layers.findIndex(l => kindOf(l) === "text"); return i < 0 ? S.layers.length : i; };
+const blurInsertIdx = () => { const i = S.layers.findIndex(l => kindOf(l) === "light" || kindOf(l) === "text"); return i < 0 ? S.layers.length : i; };
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
 
 /* ---------- History ---------- */
@@ -584,13 +585,13 @@ cv.addEventListener("pointerdown", e => {
       gesture = {type:"move", L:hit, sx:px, sy:py, ox:hit.p.x, oy:hit.p.y};
       if(S.sel !== hit.id){ S.sel = hit.id; if(S.tab === "looks" || S.tab === "layers") openTab("text"); else refreshUI(); }
       draw();
-    } else if(selLayer() && kindOf(selLayer()) === "light" && selLayer().on){
+    } else if(selLayer() && ["light","blur"].includes(kindOf(selLayer())) && selLayer().on){
       const L = selLayer(); gesture = {type:"move", L, sx:px, sy:py, ox:L.p.x, oy:L.p.y};
     } else { gesture = {type:"orig"}; setOrig(true); }
   } else if(ptrs.size === 2){
     if(gesture && gesture.type === "orig") setOrig(false);
     const L = selLayer();
-    if(L && kindOf(L) !== "color"){ const q = pinchInfo(); gesture = {type:"pinch", L, d0:q.d, a0:q.a, s0:L.p.size, r0: kindOf(L) === "text" ? L.p.rot : L.p.angle}; }
+    if(L && kindOf(L) !== "color"){ const q = pinchInfo(); gesture = {type:"pinch", L, d0:q.d, a0:q.a, s0:L.p.size, r0: kindOf(L) === "light" ? L.p.angle : L.p.rot}; }
     else gesture = null;
   }
 });
@@ -609,8 +610,8 @@ cv.addEventListener("pointermove", e => {
     changed(false);
   } else if(gesture.type === "pinch" && ptrs.size >= 2){
     const q = pinchInfo(), L = gesture.L;
-    const isLight = kindOf(L) === "light";
-    L.p.size = isLight ? clamp(gesture.s0 * q.d / gesture.d0, .3, 3) : clamp(gesture.s0 * q.d / gesture.d0, 1, 60);
+    const kd = kindOf(L), isLight = kd === "light", ratio = gesture.s0 * q.d / gesture.d0;
+    L.p.size = isLight ? clamp(ratio, .3, 3) : kd === "blur" ? clamp(ratio, .05, 2) : clamp(ratio, 1, 60);
     let r = gesture.r0 + (q.a - gesture.a0) * 180 / Math.PI;
     r = ((r + 540) % 360) - 180; if(!isLight && Math.abs(r) < 3) r = 0;
     if(isLight) L.p.angle = r; else L.p.rot = r;
@@ -717,14 +718,21 @@ function buildLightTab(){
   const box = $("#p-light"); box.replaceChildren();
   const L = selLayer(), isL = !!L && kindOf(L) === "light";
   if(isL && fxOf(L.style)) S.fxCat = fxOf(L.style).cat;
+  if(L && kindOf(L) === "blur") S.fxCat = "blur";
   S.fxCat = S.fxCat || "licht";
   const chips = document.createElement("div"); chips.className = "chips";
-  for(const [k, n] of [["licht","Licht"],["atmo","Atmosphäre"]]){
+  for(const [k, n] of [["licht","Licht"],["atmo","Atmosphäre"],["blur","Unschärfe"]]){
     const c = document.createElement("button"); c.className = "chip"; c.textContent = n; c.setAttribute("aria-pressed", S.fxCat === k);
-    c.onclick = () => { S.fxCat = k; if(isL && fxOf(L.style) && fxOf(L.style).cat !== k){ S.sel = null; syncAmount(); draw(); } buildLightTab(); };
+    c.onclick = () => {
+      S.fxCat = k;
+      const curCat = L ? (kindOf(L) === "blur" ? "blur" : (fxOf(L.style) || {}).cat) : null;
+      if(L && (kindOf(L) === "light" || kindOf(L) === "blur") && curCat !== k){ S.sel = null; syncAmount(); draw(); }
+      buildLightTab();
+    };
     chips.append(c);
   }
   box.append(chips);
+  if(S.fxCat === "blur"){ buildBlurTab(box, L && kindOf(L) === "blur" ? L : null); return; }
   const strip = document.createElement("div"); strip.className = "strip";
   for(const lp of LIGHTS.filter(l => l.cat === S.fxCat)){
     const b = document.createElement("button"); b.className = "look"; b.setAttribute("aria-pressed", isL && L.style === lp.key);
@@ -898,10 +906,18 @@ function paint(){
   cx.globalCompositeOperation = "source-over"; cx.globalAlpha = 1;
   cx.drawImage(R.c, 0, 0);
   if(S.showOrig) return;
+  drawBlurs(cx, R.W, R.H);
   drawLights(cx, R.W, R.H);
   drawTexts(cx, R.W, R.H);
   if(S.pro && S.tab === "mask") paintMaskOverlay();
   const SL = selLayer();
+  if(SL && SL.on && kindOf(SL) === "blur"){
+    const k = cv.width / (cv.clientWidth || cv.width);
+    cx.save(); cx.translate(SL.p.x*R.W, SL.p.y*R.H); cx.rotate(SL.p.rot*Math.PI/180);
+    blurShapePath(cx, SL.p, Math.min(R.W, R.H));
+    cx.lineWidth = 1.5*k; cx.setLineDash([6*k, 5*k]); cx.strokeStyle = "rgba(255,255,255,.9)"; cx.shadowColor = "rgba(0,0,0,.6)"; cx.shadowBlur = 3*k;
+    cx.stroke(); cx.restore();
+  }
   if(SL && SL.on && kindOf(SL) === "light" && !(fxOf(SL.style) || {}).tile){
     const k = cv.width / (cv.clientWidth || cv.width), m = 14*k;
     const mx = clamp(SL.p.x*R.W, m, R.W-m), my = clamp(SL.p.y*R.H, m, R.H-m);
@@ -1224,6 +1240,132 @@ function buildMaskTab(){
   const rb = document.createElement("button"); rb.className = "btn"; rb.textContent = "Maske entfernen"; rb.disabled = !mk;
   rb.onclick = () => { delete S.masks[L.id]; draw(); buildMaskTab(); };
   bar.append(ub, ib, rb); box.append(bar);
+}
+
+/* ---------- Unschärfe-Ebenen (GPU-Gauß) ---------- */
+class Blurrer {
+  constructor(){
+    const c = this.c = document.createElement("canvas");
+    const gl = this.gl = c.getContext("webgl", {premultipliedAlpha:false, preserveDrawingBuffer:true, alpha:true, antialias:false});
+    if(!gl) throw new Error("WebGL fehlt");
+    const FSB = `precision mediump float; varying vec2 v; uniform sampler2D t; uniform vec2 dir; uniform float sigma;
+      void main(){ vec4 acc = vec4(0.); float ws = 0.;
+        for(int i = -18; i <= 18; i++){ float x = float(i); float w = exp(-x*x/(2.*sigma*sigma)); acc += texture2D(t, v + dir*x)*w; ws += w; }
+        gl_FragColor = acc/ws; }`;
+    const sh = (t, src) => { const x = gl.createShader(t); gl.shaderSource(x, src); gl.compileShader(x);
+      if(!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+    const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FSB)); gl.linkProgram(pr); gl.useProgram(pr);
+    const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+    const a = gl.getAttribLocation(pr, "p"); gl.enableVertexAttribArray(a); gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
+    this.uDir = gl.getUniformLocation(pr, "dir"); this.uSig = gl.getUniformLocation(pr, "sigma");
+    gl.uniform1i(gl.getUniformLocation(pr, "t"), 0);
+    const tex = () => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+      for(const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+      return t; };
+    this.src = tex(); this.ft = tex(); this.fb = gl.createFramebuffer();
+  }
+  /* returns a small canvas holding the blurred source; draw it scaled to W×H */
+  run(src, W, H, radius){
+    const gl = this.gl, f = Math.max(1, radius / 5);
+    const w = Math.max(1, Math.round(W / f)), h = Math.max(1, Math.round(H / f)), sigma = Math.max(.6, radius / f);
+    const sm = tmp("blurDown", w, h), sx = sm.getContext("2d"); sx.imageSmoothingQuality = "high"; sx.drawImage(src, 0, 0, w, h);
+    this.c.width = w; this.c.height = h; gl.viewport(0, 0, w, h);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.src);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sm);
+    gl.bindTexture(gl.TEXTURE_2D, this.ft); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fb); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.ft, 0);
+    gl.uniform1f(this.uSig, sigma);
+    gl.bindTexture(gl.TEXTURE_2D, this.src); gl.uniform2f(this.uDir, 1/w, 0); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, this.ft); gl.uniform2f(this.uDir, 0, 1/h); gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    return this.c;
+  }
+}
+let BLUR = null;
+const BDEF = {shape:"circle", strength:.5, size:.55, soft:.5, ratio:1.8, rot:0, x:.5, y:.5, invert:false};
+const BSHAPES = [["circle","Kreis"],["square","Quadrat"],["rect","Rechteck"]];
+function blurShapePath(x, p, S0){
+  const base = p.size * S0; x.beginPath();
+  if(p.shape === "circle") x.arc(0, 0, base/2, 0, Math.PI*2);
+  else { let w = base, h = base; if(p.shape === "rect"){ const r = Math.sqrt(p.ratio); w = base*r; h = base/r; } x.rect(-w/2, -h/2, w, h); }
+}
+function renderBlur(dst, L, W, H){
+  const p = L.p; if(p.strength <= 0) return;
+  if(!BLUR) BLUR = new Blurrer();
+  const S0 = Math.min(W, H), base = p.size * S0;
+  // 1) focus mask: opaque where the blur applies, feathered by a real gaussian
+  const m = tmp("blurMask", W, H), mx = m.getContext("2d");
+  mx.save();
+  if(p.invert){ mx.fillStyle = "#fff"; mx.translate(p.x*W, p.y*H); mx.rotate(p.rot*Math.PI/180); blurShapePath(mx, p, S0); mx.fill(); }
+  else { mx.fillStyle = "#fff"; mx.fillRect(0, 0, W, H); mx.globalCompositeOperation = "destination-out"; mx.translate(p.x*W, p.y*H); mx.rotate(p.rot*Math.PI/180); blurShapePath(mx, p, S0); mx.fill(); }
+  mx.restore();
+  const feather = p.soft * base * .3 + 1;
+  const fm = BLUR.run(m, W, H, feather);
+  const m2 = tmp("blurMask2", W, H), m2x = m2.getContext("2d"); m2x.imageSmoothingQuality = "high"; m2x.drawImage(fm, 0, 0, W, H);
+  // 2) blurred copy of everything below this layer
+  const radius = p.strength * S0 * .045 + .5;
+  const bl = BLUR.run(dst.canvas, W, H, radius);
+  const c = tmp("blurLayer", W, H), x = c.getContext("2d"); x.imageSmoothingQuality = "high"; x.drawImage(bl, 0, 0, W, H);
+  x.globalCompositeOperation = "destination-in"; x.drawImage(m2, 0, 0);
+  const mk = L.id && S.masks[L.id];
+  if(mk) x.drawImage(mk.c, 0, 0, W, H);
+  x.globalCompositeOperation = "source-over";
+  dst.save(); dst.globalAlpha = L.amount; dst.drawImage(c, 0, 0); dst.restore();
+}
+function drawBlurs(x, W, H){ for(const L of S.layers) if(L.on && kindOf(L) === "blur") renderBlur(x, L, W, H); }
+function applyBlur(shape, forceNew){
+  const label = (BSHAPES.find(b => b[0] === shape) || [0, ""])[1];
+  let L = selLayer();
+  if(forceNew || !L || kindOf(L) !== "blur"){
+    L = {id:newId(), kind:"blur", name:"Unschärfe · " + label, amount:1, on:true, p:{...BDEF, shape}};
+    S.layers.splice(blurInsertIdx(), 0, L); S.sel = L.id;
+  } else { L.p.shape = shape; L.name = "Unschärfe · " + label; }
+  changed(true);
+}
+function buildBlurTab(box, L){
+  const strip = document.createElement("div"); strip.className = "strip";
+  for(const [shape, n] of BSHAPES){
+    const b = document.createElement("button"); b.className = "look"; b.setAttribute("aria-pressed", !!L && L.p.shape === shape);
+    const c = document.createElement("canvas"); c.width = c.height = TH;
+    const x = c.getContext("2d");
+    if(thumbBase){ x.drawImage(thumbBase, 0, 0, TH, TH); try { renderBlur(x, {amount:1, p:{...BDEF, shape, strength:.9, size:.6}}, TH, TH); } catch {} }
+    x.save(); x.translate(TH/2, TH/2); blurShapePath(x, {...BDEF, shape, size:.6}, TH); x.setLineDash([5, 4]); x.lineWidth = 1.5; x.strokeStyle = "rgba(255,255,255,.9)"; x.stroke(); x.restore();
+    const sp = document.createElement("span"); sp.textContent = n;
+    b.append(c, sp); b.onclick = () => applyBlur(shape); strip.append(b);
+  }
+  box.append(strip);
+  if(!L){
+    const p = document.createElement("p"); p.className = "empty";
+    p.textContent = "Wähle eine Form. Innen bleibt das Bild scharf, außen wird es weichgezeichnet. Verschieben mit einem Finger, Größe und Drehung mit zwei Fingern.";
+    box.append(p); return;
+  }
+  groupHead(box, "Schnell");
+  rangeCtl(box, L.p, "strength", "Unschärfe", 0, 1, .01, .5, v => Math.round(v*100) + "%");
+  rangeCtl(box, L.p, "size", "Größe", .05, 2, .01, .55, v => Math.round(v*100) + "%");
+  rangeCtl(box, L.p, "soft", "Weicher Rand", 0, 1, .01, .5, v => Math.round(v*100) + "%");
+  if(L.p.shape === "rect") rangeCtl(box, L.p, "ratio", "Seitenverhältnis", .25, 5, .01, 1.8, v => v.toFixed(2));
+  switchCtl(box, L.p, "invert", "Innen weichzeichnen");
+  const bar = document.createElement("div"); bar.className = "bar";
+  const nb = document.createElement("button"); nb.className = "btn"; nb.textContent = "+ Weitere Unschärfe"; nb.onclick = () => applyBlur(L.p.shape, true);
+  const more = document.createElement("button"); more.className = "btn pro-only"; more.textContent = "Alle Optionen"; more.onclick = () => openTab("adjust");
+  bar.append(nb, more); box.append(bar);
+  subjectButtons(box, L, false);
+}
+function buildBlurControls(box, L){
+  const p = L.p;
+  groupHead(box, "Unschärfe");
+  segCtl(box, p, "shape", "Form", BSHAPES);
+  rangeCtl(box, p, "strength", "Unschärfe", 0, 1, .01, .5, v => Math.round(v*100) + "%");
+  rangeCtl(box, L, "amount", "Deckkraft", 0, 1, .01, 1, v => Math.round(v*100) + "%");
+  switchCtl(box, p, "invert", "Innen weichzeichnen");
+  groupHead(box, "Fokusbereich");
+  rangeCtl(box, p, "size", "Größe", .05, 2, .01, .55, v => Math.round(v*100) + "%");
+  rangeCtl(box, p, "soft", "Weicher Rand", 0, 1, .01, .5, v => Math.round(v*100) + "%");
+  rangeCtl(box, p, "ratio", "Seitenverhältnis", .25, 5, .01, 1.8, v => v.toFixed(2) + (p.shape === "rect" ? "" : " (Rechteck)"));
+  rangeCtl(box, p, "rot", "Drehung", -180, 180, 1, 0, v => Math.round(v) + "°");
+  rangeCtl(box, p, "x", "Horizontal", 0, 1, .001, .5, v => Math.round(v*100) + "%");
+  rangeCtl(box, p, "y", "Vertikal", 0, 1, .001, .5, v => Math.round(v*100) + "%");
 }
 
 /* ---------- Motiv-Erkennung (Pro, KI im Browser) ---------- */
@@ -1576,7 +1718,7 @@ function buildLayers(){
     const name = document.createElement("button"); name.className = "name";
     const isT = kindOf(L) === "text";
     name.innerHTML = ""; name.append(isT ? textLabel(L) : L.name);
-    const sm = document.createElement("small"); sm.textContent = `${{text:"Text", light:"Effekt", color:"Farbe"}[kindOf(L)]} · ${Math.round(L.amount*100)} %${S.masks[L.id] ? " · Maske" : ""}`; name.append(sm);
+    const sm = document.createElement("small"); sm.textContent = `${{text:"Text", light:"Effekt", blur:"Unschärfe", color:"Farbe"}[kindOf(L)]} · ${Math.round(L.amount*100)} %${S.masks[L.id] ? " · Maske" : ""}`; name.append(sm);
     name.onclick = () => { S.sel = L.id; commit(); refreshUI(); draw(); };
     const acts = document.createElement("div"); acts.className = "acts";
     const up = btn(ICON.up, "Nach oben", () => move(i, 1)); up.disabled = i === S.layers.length-1 || kindOf(S.layers[i+1]) !== kindOf(L);
@@ -1640,6 +1782,7 @@ function buildAdjust(){
   const L = selLayer();
   if(L && kindOf(L) === "text"){ buildTextControls(box, L); return; }
   if(L && kindOf(L) === "light"){ buildLightControls(box, L); return; }
+  if(L && kindOf(L) === "blur"){ buildBlurControls(box, L); return; }
   if(!L){ const p = document.createElement("p"); p.className = "empty"; p.textContent = "Wähle zuerst eine Ebene oder einen Look."; box.append(p); return; }
   const head = document.createElement("div"); head.className = "bar"; head.style.marginTop = "0";
   const reset = document.createElement("button"); reset.className = "btn"; reset.textContent = "Look zurücksetzen";
@@ -1756,7 +1899,7 @@ async function runExport(){
   try {
     r = new Renderer(gc); r.setSource(src); r.render(S.layers, S.masks);
     oc.width = r.W; oc.height = r.H;
-    const o = oc.getContext("2d"); o.drawImage(gc, 0, 0); drawLights(o, r.W, r.H); drawTexts(o, r.W, r.H);
+    const o = oc.getContext("2d"); o.drawImage(gc, 0, 0); drawBlurs(o, r.W, r.H); drawLights(o, r.W, r.H); drawTexts(o, r.W, r.H);
   }
   catch { wrap.innerHTML = '<span class="spin">Export ist fehlgeschlagen. Wähle eine kleinere Größe.</span>'; return; }
   const type = $("#exFmt").value;
