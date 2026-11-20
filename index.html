@@ -188,7 +188,7 @@ input[type=range]:disabled{opacity:.3}
   <section id="drawer">
     <div class="tabs" role="tablist">
       <button class="tab" role="tab" data-tab="looks" aria-selected="true">Looks</button>
-      <button class="tab" role="tab" data-tab="light" aria-selected="false">Licht</button>
+      <button class="tab" role="tab" data-tab="light" aria-selected="false">Effekte</button>
       <button class="tab" role="tab" data-tab="text" aria-selected="false">Text</button>
       <button class="tab" role="tab" data-tab="layers" aria-selected="false">Ebenen</button>
       <button class="tab pro-only" role="tab" data-tab="adjust" aria-selected="false">Regler</button>
@@ -597,13 +597,20 @@ function blurDraw(dst, src, W, H, r){
   for(let i = lv-2; i >= 0; i--){ const [w2,h2] = sizes[i]; const c = tmp("bu"+i, w2, h2); c.getContext("2d").drawImage(cur, 0, 0, w2, h2); cur = c; }
   dst.drawImage(cur, 0, 0, W, H);
 }
-const LDEF = {x:.5, y:.5, size:1, angle:0, flip:false, color:"#ffffff", blend:"screen"};
+const LDEF = {x:.5, y:.5, size:1, angle:0, flip:false, color:"#ffffff", blend:"screen", ground:0};
 const LIGHTS = [
-  {key:"sonne", name:"Sonnenstrahlen", src:"overlays/sonne.jpg", thumb:"overlays/sonne-thumb.jpg"},
-  {key:"flare", name:"Lens Flare", src:"overlays/flare.jpg", thumb:"overlays/flare-thumb.jpg"},
-  {key:"leck", name:"Lichtleck", src:"overlays/leck.jpg", thumb:"overlays/leck-thumb.jpg"},
-  {key:"prisma", name:"Prisma", src:"overlays/prisma.jpg", thumb:"overlays/prisma-thumb.jpg"},
+  {key:"sonne", cat:"licht", name:"Sonnenstrahlen", src:"overlays/sonne.jpg", thumb:"overlays/sonne-thumb.jpg"},
+  {key:"flare", cat:"licht", name:"Lens Flare", src:"overlays/flare.jpg", thumb:"overlays/flare-thumb.jpg"},
+  {key:"leck", cat:"licht", name:"Lichtleck", src:"overlays/leck.jpg", thumb:"overlays/leck-thumb.jpg"},
+  {key:"prisma", cat:"licht", name:"Prisma", src:"overlays/prisma.jpg", thumb:"overlays/prisma-thumb.jpg"},
+  {key:"nebel", cat:"atmo", tile:true, name:"Nebel", src:"overlays/nebel.jpg", thumb:"overlays/nebel-thumb.jpg", def:{ground:.6, size:1.2}, amount:.75},
+  {key:"dunst", cat:"atmo", tile:true, name:"Dunst", src:"overlays/dunst.jpg", thumb:"overlays/dunst-thumb.jpg", def:{size:1.5}, amount:.6},
+  {key:"rauch", cat:"atmo", tile:true, name:"Rauch", src:"overlays/rauch.jpg", thumb:"overlays/rauch-thumb.jpg", def:{ground:.35}, amount:.8},
+  {key:"staub", cat:"atmo", tile:true, name:"Staub", src:"overlays/staub.jpg", thumb:"overlays/staub-thumb.jpg", def:{}},
+  {key:"regen", cat:"atmo", tile:true, name:"Regen", src:"overlays/regen.jpg", thumb:"overlays/regen-thumb.jpg", def:{size:.8, angle:8}, amount:.8},
+  {key:"schnee", cat:"atmo", tile:true, name:"Schnee", src:"overlays/schnee.jpg", thumb:"overlays/schnee-thumb.jpg", def:{}},
 ];
+const fxOf = key => LIGHTS.find(l => l.key === key) || null;
 const OVL = {};
 function ovlImage(key, which = "src"){
   const id = key + ":" + which;
@@ -618,11 +625,24 @@ function ovlImage(key, which = "src"){
 }
 function renderLight(dst, L, W, H, which = "src"){
   const p = L.p, img = ovlImage(L.style, which); if(!img) return;
+  const lp = fxOf(L.style);
   const side = Math.max(W, H) * p.size;
   const c = tmp("light", W, H), x = c.getContext("2d");
   x.fillStyle = "#000"; x.fillRect(0, 0, W, H);
   x.save(); x.translate(p.x*W, p.y*H); x.rotate(p.angle*Math.PI/180); if(p.flip) x.scale(-1, 1);
-  x.imageSmoothingQuality = "high"; x.drawImage(img, -side/2, -side/2, side, side); x.restore();
+  x.imageSmoothingQuality = "high";
+  if(lp && lp.tile){
+    // seamless texture: repeat it, so any position, size or angle fills the frame
+    const k = side / img.width, pat = x.createPattern(img, "repeat"), big = Math.hypot(W, H) / k + img.width;
+    x.scale(k, k); x.fillStyle = pat; x.fillRect(-big, -big, big*2, big*2);
+  } else x.drawImage(img, -side/2, -side/2, side, side);
+  x.restore();
+  if(p.ground > 0){
+    const g = x.createLinearGradient(0, H*(1 - p.ground), 0, H);
+    g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(Math.min(1, .55), "rgba(0,0,0,1)");
+    x.fillStyle = "#000"; x.globalCompositeOperation = "destination-in"; x.fillStyle = g; x.fillRect(0, 0, W, H);
+    x.globalCompositeOperation = "source-over";
+  }
   if((p.color || "#ffffff").toLowerCase() !== "#ffffff"){ x.globalCompositeOperation = "multiply"; x.fillStyle = p.color; x.fillRect(0, 0, W, H); x.globalCompositeOperation = "source-over"; }
   const mk = L.id && S.masks[L.id];
   if(mk){ x.globalCompositeOperation = "destination-in"; x.drawImage(mk.c, 0, 0, W, H); x.globalCompositeOperation = "source-over"; }
@@ -634,49 +654,66 @@ function applyLight(key, forceNew){
   const lp = LIGHTS.find(l => l.key === key); if(!lp) return;
   let L = selLayer();
   if(forceNew || !L || kindOf(L) !== "light"){
-    L = {id:newId(), kind:"light", name:lp.name, style:key, amount:1, on:true, p:{...LDEF}};
+    L = {id:newId(), kind:"light", name:lp.name, style:key, amount:lp.amount ?? 1, on:true, p:{...LDEF, ...(lp.def || {})}};
     S.layers.splice(lightInsertIdx(), 0, L); S.sel = L.id;
-  } else { L.style = key; L.name = lp.name; }
+  } else {
+    const prev = fxOf(L.style);
+    L.style = key; L.name = lp.name;
+    if(!prev || !!prev.tile !== !!lp.tile || lp.tile){ L.p = {...LDEF, ...(lp.def || {})}; L.amount = lp.amount ?? 1; }
+  }
   changed(true);
 }
 function buildLightTab(){
   const box = $("#p-light"); box.replaceChildren();
   const L = selLayer(), isL = !!L && kindOf(L) === "light";
+  if(isL && fxOf(L.style)) S.fxCat = fxOf(L.style).cat;
+  S.fxCat = S.fxCat || "licht";
+  const chips = document.createElement("div"); chips.className = "chips";
+  for(const [k, n] of [["licht","Licht"],["atmo","Atmosphäre"]]){
+    const c = document.createElement("button"); c.className = "chip"; c.textContent = n; c.setAttribute("aria-pressed", S.fxCat === k);
+    c.onclick = () => { S.fxCat = k; if(isL && fxOf(L.style) && fxOf(L.style).cat !== k){ S.sel = null; syncAmount(); draw(); } buildLightTab(); };
+    chips.append(c);
+  }
+  box.append(chips);
   const strip = document.createElement("div"); strip.className = "strip";
-  for(const lp of LIGHTS){
+  for(const lp of LIGHTS.filter(l => l.cat === S.fxCat)){
     const b = document.createElement("button"); b.className = "look"; b.setAttribute("aria-pressed", isL && L.style === lp.key);
     const c = document.createElement("canvas"); c.width = c.height = TH;
     const x = c.getContext("2d");
     if(thumbBase) x.drawImage(thumbBase, 0, 0, TH, TH);
-    renderLight(x, {amount:1, style:lp.key, p:{...LDEF}}, TH, TH, "thumb");
+    renderLight(x, {amount:lp.amount ?? 1, style:lp.key, p:{...LDEF, ...(lp.def || {}), ground:0}}, TH, TH, "thumb");
     const s = document.createElement("span"); s.textContent = lp.name;
     b.append(c, s); b.onclick = () => applyLight(lp.key); strip.append(b);
   }
   box.append(strip);
   if(!isL){
     const p = document.createElement("p"); p.className = "empty";
-    p.textContent = "Tippe ein Overlay an. Danach verschiebst du es mit dem Finger direkt im Bild, mit zwei Fingern änderst du Größe und Drehung.";
+    p.textContent = S.fxCat === "atmo"
+      ? "Tippe eine Atmosphäre an. Sie füllt das ganze Bild nahtlos. Mit „Von unten“ legst du sie zum Beispiel als Bodennebel nur in den unteren Bildteil."
+      : "Tippe ein Overlay an. Danach verschiebst du es mit dem Finger direkt im Bild, mit zwei Fingern änderst du Größe und Drehung.";
     box.append(p); return;
   }
   groupHead(box, "Schnell");
   rangeCtl(box, L, "amount", "Stärke", 0, 1, .01, 1, v => Math.round(v*100) + "%");
   rangeCtl(box, L.p, "size", "Größe", .3, 3, .01, 1, v => v.toFixed(2) + "×");
+  if((fxOf(L.style) || {}).tile) rangeCtl(box, L.p, "ground", "Von unten", 0, 1, .01, 0, v => v ? Math.round(v*100) + "%" : "aus");
   colorCtl(box, L.p, "color", "Tönung");
   const bar = document.createElement("div"); bar.className = "bar";
   const fl = document.createElement("button"); fl.className = "btn"; fl.textContent = "Spiegeln";
   fl.onclick = () => { L.p.flip = !L.p.flip; changed(false); };
   const nb = document.createElement("button"); nb.className = "btn"; nb.textContent = "+ Weiteres Overlay";
-  nb.onclick = () => applyLight(L.style || "sonne", true);
+  nb.onclick = () => applyLight(L.style || "sonne", true); nb.textContent = (fxOf(L.style) || {}).tile ? "+ Weitere Atmosphäre" : "+ Weiteres Overlay";
   const more = document.createElement("button"); more.className = "btn"; more.textContent = "Alle Optionen";
   more.onclick = () => openTab("adjust"); more.classList.add("pro-only");
   bar.append(fl, nb, more); box.append(bar);
 }
 function buildLightControls(box, L){
   const p = L.p;
-  groupHead(box, "Overlay");
+  groupHead(box, (fxOf(L.style) || {}).tile ? "Atmosphäre" : "Overlay");
   rangeCtl(box, L, "amount", "Stärke", 0, 1, .01, 1, v => Math.round(v*100) + "%");
   rangeCtl(box, p, "size", "Größe", .3, 3, .01, 1, v => v.toFixed(2) + "×");
   rangeCtl(box, p, "angle", "Drehung", -180, 180, 1, 0, v => Math.round(v) + "°");
+  if((fxOf(L.style) || {}).tile) rangeCtl(box, p, "ground", "Von unten", 0, 1, .01, 0, v => v ? Math.round(v*100) + "%" : "aus");
   switchCtl(box, p, "flip", "Spiegeln");
   colorCtl(box, p, "color", "Tönung");
   selectCtl(box, p, "blend", "Mischmodus", [["screen","Umgekehrt multiplizieren"],["lighter","Addieren"],["color-dodge","Farbig abwedeln"]]);
@@ -814,7 +851,7 @@ function paint(){
   drawTexts(cx, R.W, R.H);
   if(S.pro && S.tab === "mask") paintMaskOverlay();
   const SL = selLayer();
-  if(SL && SL.on && kindOf(SL) === "light"){
+  if(SL && SL.on && kindOf(SL) === "light" && !(fxOf(SL.style) || {}).tile){
     const k = cv.width / (cv.clientWidth || cv.width), m = 14*k;
     const mx = clamp(SL.p.x*R.W, m, R.W-m), my = clamp(SL.p.y*R.H, m, R.H-m);
     cx.save(); cx.strokeStyle = "rgba(255,255,255,.95)"; cx.lineWidth = 1.5*k; cx.shadowColor = "rgba(0,0,0,.6)"; cx.shadowBlur = 4*k;
@@ -1326,7 +1363,7 @@ function buildLayers(){
     const name = document.createElement("button"); name.className = "name";
     const isT = kindOf(L) === "text";
     name.innerHTML = ""; name.append(isT ? textLabel(L) : L.name);
-    const sm = document.createElement("small"); sm.textContent = `${{text:"Text", light:"Licht", color:"Farbe"}[kindOf(L)]} · ${Math.round(L.amount*100)} %${S.masks[L.id] ? " · Maske" : ""}`; name.append(sm);
+    const sm = document.createElement("small"); sm.textContent = `${{text:"Text", light:"Effekt", color:"Farbe"}[kindOf(L)]} · ${Math.round(L.amount*100)} %${S.masks[L.id] ? " · Maske" : ""}`; name.append(sm);
     name.onclick = () => { S.sel = L.id; commit(); refreshUI(); draw(); };
     const acts = document.createElement("div"); acts.className = "acts";
     const up = btn(ICON.up, "Nach oben", () => move(i, 1)); up.disabled = i === S.layers.length-1 || kindOf(S.layers[i+1]) !== kindOf(L);
