@@ -130,6 +130,14 @@ input[type=range]:disabled{opacity:.3}
 #sheet .top .btn.plain:first-child{visibility:hidden}
 #sheet .opts{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;justify-content:center}
 #sheet select{height:34px;border-radius:17px;border:0;background:var(--raise);padding:0 14px}
+.saveset{display:flex;gap:8px;margin:0 auto 12px;width:100%;max-width:460px}
+.saveset input{flex:1;min-width:0;height:34px;border-radius:17px;border:0;background:var(--raise);padding:0 14px;font-size:16px;-webkit-user-select:text;user-select:text}
+.saveset input::placeholder{color:var(--faint)}
+.lw{position:relative;flex:none;scroll-snap-align:start}
+.look img{width:78px;height:78px;border-radius:12px;display:block;background:var(--raise);object-fit:cover}
+.look[data-setup] .ph{width:78px;height:78px;border-radius:12px;background:var(--raise);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:22px}
+.lx{position:absolute;top:-5px;right:-5px;width:24px;height:24px;border-radius:50%;border:0;background:#48484a;color:#fff;font-size:14px;line-height:24px;padding:0;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.lx[data-armed]{background:var(--danger)}
 #sheet .imgwrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
 #sheet img{max-width:100%;max-height:100%;object-fit:contain;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto}
 #sheet p{color:var(--muted);font-size:13px;line-height:1.45;text-align:center;margin:12px auto 0;max-width:42ch}
@@ -227,6 +235,10 @@ input[type=range]:disabled{opacity:.3}
     <button class="btn" id="shareBtn" hidden>Teilen …</button>
     <a class="btn" id="dlLink" hidden>Datei laden</a>
   </div>
+  <form class="saveset" id="saveSetForm">
+    <input type="text" id="setName" maxlength="40" placeholder="Name für dieses Setup" aria-label="Name für das Setup" autocomplete="off">
+    <button class="btn" type="submit" id="setSave">Setup speichern</button>
+  </form>
   <div class="imgwrap" id="exWrap"><span class="spin">Wird berechnet …</span></div>
   <p>Bild gedrückt halten und „Zu Fotos hinzufügen“ wählen.</p>
 </div>
@@ -1122,6 +1134,64 @@ function buildMaskTab(){
   bar.append(ub, ib, rb); box.append(bar);
 }
 
+/* ---------- Setups (ganzer Ebenen-Stapel) ---------- */
+let setups = store.get("lichtwerk.setups", []);
+let lastExport = null;
+function serializeSetup(name, auto, fromCanvas){
+  const masks = {};
+  for(const L of S.layers){
+    const mk = S.masks[L.id]; if(!mk) continue;
+    const k = 256 / Math.max(mk.c.width, mk.c.height), c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(mk.c.width*k)); c.height = Math.max(1, Math.round(mk.c.height*k));
+    c.getContext("2d").drawImage(mk.c, 0, 0, c.width, c.height); masks[L.id] = c.toDataURL("image/png");
+  }
+  let thumb = "";
+  if(fromCanvas){
+    const t = document.createElement("canvas"); t.width = t.height = TH;
+    const w = fromCanvas.width, h = fromCanvas.height, q = Math.min(w, h);
+    t.getContext("2d").drawImage(fromCanvas, (w-q)/2, (h-q)/2, q, q, 0, 0, TH, TH);
+    thumb = t.toDataURL("image/jpeg", .72);
+  }
+  return {id:"s" + Date.now().toString(36) + Math.random().toString(36).slice(2,5), name, auto, ts:Date.now(),
+    layers:JSON.parse(JSON.stringify(S.layers)), masks, thumb};
+}
+const setupSig = st => JSON.stringify(st.layers.map(({id, ...rest}) => rest)) + Object.keys(st.masks || {}).length;
+function persistSetups(){
+  try { localStorage.setItem("lichtwerk.setups", JSON.stringify(setups)); return true; }
+  catch { return false; }
+}
+function saveSetup(entry){
+  if(!entry.layers.length) return false;
+  if(entry.auto){
+    const sig = setupSig(entry);
+    setups = setups.filter(x => !(x.auto && setupSig(x) === sig));
+  }
+  setups.unshift(entry);
+  const autos = setups.filter(x => x.auto);
+  if(autos.length > 5){ const drop = new Set(autos.slice(5).map(x => x.id)); setups = setups.filter(x => !drop.has(x.id)); }
+  while(setups.length > 30) setups.pop();
+  if(persistSetups()) return true;
+  setups = setups.filter(x => x !== entry);   // storage full: keep the old list
+  return false;
+}
+function applySetup(st){
+  const idMap = {};
+  const layers = st.layers.map(L => { const c = JSON.parse(JSON.stringify(L)); c.id = newId(); idMap[L.id] = c.id; return c; });
+  S.layers = layers; S.masks = {};
+  S.sel = layers.length ? layers[layers.length-1].id : null;
+  for(const [oid, url] of Object.entries(st.masks || {})){
+    const L = layers.find(l => l.id === idMap[oid]); if(!L) continue;
+    const img = new Image();
+    img.onload = () => { const mk = ensureMask(L), x = mk.c.getContext("2d"); x.clearRect(0, 0, mk.c.width, mk.c.height); x.drawImage(img, 0, 0, mk.c.width, mk.c.height); mk.ver++; draw(); };
+    img.src = url;
+  }
+  for(const L of layers) if(kindOf(L) === "text") loadFont(L.p.font);
+  changed(true);
+  toast(`Setup „${st.name}“ angewendet.`);
+}
+function deleteSetup(id){ setups = setups.filter(x => x.id !== id); persistSetups(); if(!setups.length && S.cat === "Setups") S.cat = "Alle"; buildCats(); buildStrip(); }
+const fmtWhen = ts => new Date(ts).toLocaleString("de-DE", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"});
+
 /* ---------- Mode (Fast / Pro) ---------- */
 function setMode(pro){
   S.pro = pro; document.body.classList.toggle("pro", pro);
@@ -1173,7 +1243,7 @@ const amt = $("#amt");
 amt.oninput = () => { const L = colorTarget(); if(!L) return; L.amount = +amt.value; $("#amtOut").textContent = Math.round(L.amount*100); changed(false); };
 
 function buildCats(){
-  const cats = ["Alle", ...(customLooks.length ? ["Eigene"] : []), "Kino","Film","Warm","Kühl","S/W","Matt"];
+  const cats = [...(setups.length ? ["Setups"] : []), "Alle", ...(customLooks.length ? ["Eigene"] : []), "Kino","Film","Warm","Kühl","S/W","Matt"];
   if(!cats.includes(S.cat)) S.cat = "Alle";
   const box = $("#cats"); box.replaceChildren();
   for(const c of cats){
@@ -1185,6 +1255,26 @@ function buildCats(){
 }
 function buildStrip(){
   const box = $("#strip"); box.replaceChildren();
+  $("#p-looks .amount").hidden = S.cat === "Setups";
+  if(S.cat === "Setups"){
+    for(const st of setups){
+      const wrap = document.createElement("div"); wrap.className = "lw";
+      const b = document.createElement("button"); b.className = "look"; b.dataset.setup = st.id;
+      if(st.thumb){ const im = document.createElement("img"); im.src = st.thumb; im.alt = ""; b.append(im); }
+      else { const ph = document.createElement("div"); ph.className = "ph"; ph.textContent = "◐"; b.append(ph); }
+      const sp = document.createElement("span"); sp.textContent = st.auto ? "Zuletzt " + fmtWhen(st.ts) : st.name; b.append(sp);
+      b.setAttribute("aria-label", "Setup anwenden: " + sp.textContent);
+      b.onclick = () => applySetup(st);
+      const x = document.createElement("button"); x.className = "lx"; x.textContent = "×"; x.setAttribute("aria-label", "Setup löschen");
+      x.onclick = e => {
+        e.stopPropagation();
+        if(x.dataset.armed !== undefined){ deleteSetup(st.id); return; }
+        x.dataset.armed = ""; x.textContent = "?"; setTimeout(() => { if(x.isConnected){ delete x.dataset.armed; x.textContent = "×"; } }, 2500);
+      };
+      wrap.append(b, x); box.append(wrap);
+    }
+    return;
+  }
   const list = allLooks().filter(l => S.cat === "Alle" ? l.cat !== "Eigene" || true : l.cat === S.cat);
   const L = colorTarget();
   for(const lk of list){
@@ -1396,7 +1486,13 @@ $("#file").onchange = async e => {
 let exportUrl = null, exportBlob = null;
 const inFrame = (() => { try { return window.self !== window.top; } catch { return true; } })();
 $("#exportBtn").onclick = () => { $("#sheet").hidden = false; runExport(); };
-$("#sheetClose").onclick = () => { $("#sheet").hidden = true; };
+$("#sheetClose").onclick = () => { $("#sheet").hidden = true; if(S.tab === "looks"){ buildCats(); buildStrip(); } };
+$("#saveSetForm").addEventListener("submit", e => {
+  e.preventDefault();
+  const inp = $("#setName"), name = inp.value.trim() || ("Setup " + (setups.filter(x => !x.auto).length + 1));
+  if(saveSetup(serializeSetup(name, false, lastExport))){ inp.value = ""; inp.blur(); toast(`„${name}“ gespeichert. Du findest es unter Looks › Setups.`); S.cat = "Setups"; }
+  else toast("Speicher ist voll. Lösche unter Looks › Setups ein paar alte Setups.");
+});
 $("#exSize").onchange = runExport; $("#exFmt").onchange = runExport;
 async function runExport(){
   const wrap = $("#exWrap"); wrap.innerHTML = '<span class="spin">Wird berechnet …</span>';
@@ -1431,7 +1527,9 @@ async function runExport(){
       s.onclick = () => navigator.share({files:[file]}).catch(() => {});
     }
   }
-  $("#sheet p").textContent = `${oc.width} × ${oc.height} px · Bild gedrückt halten und „Zu Fotos hinzufügen“ wählen.`;
+  lastExport = oc;
+  saveSetup(serializeSetup("Zuletzt", true, oc));
+  $("#sheet p").textContent = `${oc.width} × ${oc.height} px · Bild gedrückt halten und „Zu Fotos hinzufügen“ wählen. Das Setup liegt jetzt unter Looks › Setups.`;
 }
 
 /* ---------- Toast ---------- */
