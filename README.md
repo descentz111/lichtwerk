@@ -1,6 +1,6 @@
 # Lichtwerk
 
-Foto-Finishing im Browser, gebaut fürs iPhone: Farb-Looks, Lichtstrahlen und Lens Flares, Text-Ebenen, Feinschliff und Export.
+Foto-Finishing im Browser, gebaut fürs iPhone: Farb-Looks, Licht-Overlays (Sonnenstrahlen, Lens Flare, Lichtleck, Prisma), Text-Ebenen, Feinschliff und Export.
 
 **App öffnen:** https://descentz111.github.io/lichtwerk/
 
