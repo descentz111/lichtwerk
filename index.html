@@ -128,7 +128,13 @@ output{font-variant-numeric:tabular-nums;font-size:15px;color:var(--muted);text-
 .layers{list-style:none;margin:0;padding:0;border-radius:12px;background:var(--raise);overflow:hidden}
 .layer{display:grid;grid-template-columns:40px 1fr auto;align-items:center;gap:4px;padding:2px 4px;position:relative}
 .layer + .layer::before{content:"";position:absolute;top:0;left:48px;right:0;height:.5px;background:var(--line)}
-.layer .name{font-weight:400;font-size:16px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:none;border:0;text-align:left;padding:8px 0}
+.layer .name{font-weight:400;font-size:16px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:none;border:0;text-align:left;padding:8px 0;display:flex;align-items:center;gap:10px}
+.layer .name .txt{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.mthumb{flex:none;width:30px;height:30px;border-radius:6px;background:#000;box-shadow:inset 0 0 0 1px rgba(255,255,255,.25);display:block}
+.lpick{padding-bottom:10px}
+.lpick .chip{display:inline-flex;align-items:center;gap:6px;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.mk-ico{flex:none;width:12px;height:12px;border-radius:50%;background:linear-gradient(90deg,#fff 50%,#000 50%);box-shadow:0 0 0 1px rgba(255,255,255,.6)}
+.mbadge{left:max(16px,env(safe-area-inset-left,0px));transform:none;top:auto;bottom:14px;display:flex;align-items:center;gap:7px;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .layer .name small{display:block;color:var(--muted);font-size:13px;margin-top:1px}
 .layer[aria-current="true"] .name{color:var(--accent);font-weight:600}
 .layer .acts{display:flex;gap:0}
@@ -213,6 +219,7 @@ input[type=range]:disabled{opacity:.3}
   <div id="stage">
     <canvas id="cv" aria-label="Bildvorschau. Gedrückt halten zeigt das Original. Texte lassen sich verschieben, mit zwei Fingern skalieren und drehen."></canvas>
     <div class="badge" id="origBadge" hidden>Original</div>
+    <div class="badge mbadge" id="maskBadge" hidden></div>
     <div class="tip" id="tip" hidden></div>
     <div class="hint" id="hint">Beispielbild · Gedrückt halten = Vorher</div>
   </div>
@@ -1453,15 +1460,46 @@ function rangeSection(box, L){
   sw("invert", "Umkehren");
 }
 
+const layerTitle = L => kindOf(L) === "text" ? textLabel(L) : L.name;
+function layerPicker(box){
+  const row = document.createElement("div"); row.className = "chips lpick";
+  [...S.layers].reverse().forEach(L => {
+    const b = document.createElement("button"); b.className = "chip"; b.setAttribute("aria-pressed", L.id === S.sel);
+    if(S.masks[L.id]){ const i = document.createElement("span"); i.className = "mk-ico"; i.title = "Hat eine Maske"; b.append(i); }
+    b.append(layerTitle(L));
+    b.onclick = () => { S.sel = L.id; S.crange = null; S.pickMode = false; hideTip(); syncAmount(); buildMaskTab(); draw(); };
+    row.append(b);
+  });
+  box.append(row);
+  const on = row.querySelector('[aria-pressed="true"]');
+  if(on) row.scrollLeft = Math.max(0, on.offsetLeft - row.clientWidth/2 + on.offsetWidth/2);
+}
+function updateMaskBadge(){
+  const el = $("#maskBadge"), L = selLayer();
+  if(!(S.pro && S.tab === "mask" && L && !S.cropMode)){ el.hidden = true; return; }
+  el.replaceChildren(); const i = document.createElement("span"); i.className = "mk-ico"; el.append(i, "Maske: " + layerTitle(L)); el.hidden = false;
+}
+function maskThumb(L){
+  const mk = S.masks[L.id]; if(!mk) return null;
+  const c = document.createElement("canvas"); c.className = "mthumb"; c.width = c.height = 60;
+  const x = c.getContext("2d"); x.fillStyle = "#000"; x.fillRect(0, 0, 60, 60);
+  const k = Math.min(60/mk.c.width, 60/mk.c.height), w = mk.c.width*k, h = mk.c.height*k;
+  x.drawImage(mk.c, (60-w)/2, (60-h)/2, w, h);
+  c.title = "Maske dieser Ebene";
+  return c;
+}
+
 function buildMaskTab(){
   const box = $("#p-mask"); if(!box) return; box.replaceChildren();
   const L = selLayer();
-  if(!L){ const p = document.createElement("p"); p.className = "empty"; p.textContent = "Wähle zuerst unter Ebenen eine Ebene aus, deren Wirkung du begrenzen willst."; box.append(p); return; }
+  layerPicker(box);
+  updateMaskBadge();
+  if(!L){ const p = document.createElement("p"); p.className = "empty"; p.textContent = "Wähle oben die Ebene, deren Wirkung du begrenzen willst. Jede Ebene hat ihre eigene Maske."; box.append(p); return; }
   const mk = S.masks[L.id];
   const head = document.createElement("div"); head.className = "maskfor";
   head.append("Maske für ");
   const b = document.createElement("b"); b.textContent = kindOf(L) === "text" ? textLabel(L) : L.name; head.append(b);
-  head.append(mk ? "" : " · noch keine Maske, die Ebene wirkt überall");
+  head.append(mk ? " · wirkt nur auf diese Ebene" : " · noch keine Maske, die Ebene wirkt überall");
   box.append(head);
   groupHead(box, "Motiv erkennen (KI)");
   subjectButtons(box, L, true);
@@ -1854,6 +1892,7 @@ function setMode(pro){
   try { localStorage.setItem("lichtwerk.mode", pro ? "pro" : "fast"); } catch {}
   document.querySelectorAll("#mode button").forEach(b => b.setAttribute("aria-pressed", (b.dataset.m === "pro") === pro));
   if(!pro && (S.tab === "adjust" || S.tab === "mask")) openTab("looks"); else draw();
+  updateMaskBadge();
 }
 document.querySelectorAll("#mode button").forEach(b => b.onclick = () => setMode(b.dataset.m === "pro"));
 
@@ -1894,7 +1933,7 @@ function enterCrop(){
   S.cropMode = true; S.cropBefore = JSON.stringify(S.crop); S.tabBefore = S.tab; hideTip();
   $(".tabs").hidden = true;
   for(const k of ["looks","light","text","layers","adjust","mask"]) $("#p-"+k).hidden = true;
-  $("#p-crop").hidden = false; $("#hint").hidden = true;
+  $("#p-crop").hidden = false; $("#hint").hidden = true; updateMaskBadge();
   buildCropPanel(); draw();
 }
 function exitCrop(apply){
@@ -2071,6 +2110,7 @@ function openTab(name){
   S.tab = name;
   if(name !== "adjust" && !(name === "mask" && S.pickMode)) hideTip();
   if(name !== "mask") S.pickMode = false;
+  setTimeout(updateMaskBadge, 0);
   document.querySelectorAll(".tab").forEach(x => x.setAttribute("aria-selected", x.dataset.tab === name));
   for(const k of ["looks","light","text","layers","adjust","mask"]) $("#p-"+k).hidden = k !== name;
   refreshUI(); draw();
@@ -2204,8 +2244,15 @@ function buildLayers(){
     const eye = btn(L.on ? ICON.eye : ICON.eyeOff, L.on ? "Ausblenden" : "Einblenden", () => { L.on = !L.on; changed(true); });
     const name = document.createElement("button"); name.className = "name";
     const isT = kindOf(L) === "text";
-    name.innerHTML = ""; name.append(isT ? textLabel(L) : L.name);
-    const sm = document.createElement("small"); sm.textContent = `${{text:"Text", light:"Effekt", blur:"Unschärfe", color:"Farbe"}[kindOf(L)]} · ${Math.round(L.amount*100)} %${S.masks[L.id] ? " · Maske" : ""}`; name.append(sm);
+    name.innerHTML = "";
+    const th = maskThumb(L);
+    if(th){
+      th.setAttribute("role", "button"); th.setAttribute("aria-label", "Maske von " + layerTitle(L) + " öffnen");
+      th.onclick = ev => { ev.stopPropagation(); S.sel = L.id; commit(); if(S.pro) openTab("mask"); else { refreshUI(); draw(); toast("Masken bearbeitest du im Pro-Modus."); } };
+      name.append(th);
+    }
+    const txt = document.createElement("span"); txt.className = "txt"; txt.append(isT ? textLabel(L) : L.name); name.append(txt);
+    const sm = document.createElement("small"); sm.textContent = `${{text:"Text", light:"Effekt", blur:"Unschärfe", color:"Farbe"}[kindOf(L)]} · ${Math.round(L.amount*100)} %${S.masks[L.id] ? " · Maske" : ""}`; txt.append(sm);
     name.onclick = () => { S.sel = L.id; commit(); refreshUI(); draw(); };
     const acts = document.createElement("div"); acts.className = "acts";
     const up = btn(ICON.up, "Nach oben", () => move(i, 1)); up.disabled = i === S.layers.length-1 || kindOf(S.layers[i+1]) !== kindOf(L);
