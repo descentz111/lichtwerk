@@ -1517,7 +1517,85 @@ const MP_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const SEG_MODELS = {
   person:{name:"Person", size:"16 MB", url:"https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite"},
   objekt:{name:"Objekt", size:"3 MB", url:"https://storage.googleapis.com/mediapipe-models/image_segmenter/deeplab_v3/float32/1/deeplab_v3.tflite"},
+  sky:{name:"Himmel", size:"27 MB"},
 };
+/* Himmel: SegFormer-B0 (ADE20K, Klasse „sky“) über transformers.js – Lizenz NVIDIA, nur nicht-kommerziell.
+   Fällt die KI aus (offline, blockiert), übernimmt skyHeuristic() lizenzfrei. */
+const TF_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/dist/transformers.min.js";
+let skyP = null, skyReady = false;
+async function getSkyModel(){
+  if(!skyP) skyP = (async () => {
+    const T = await import(TF_URL);
+    T.env.allowLocalModels = false;
+    const seg = await T.pipeline("image-segmentation", "Xenova/segformer-b0-finetuned-ade-512-512", {dtype:"q8"});
+    skyReady = true; return {T, seg};
+  })().catch(e => { skyP = null; throw e; });
+  return skyP;
+}
+function probCanvas(w, h, alphaAt){
+  const sc = document.createElement("canvas"); sc.width = w; sc.height = h;
+  const sx = sc.getContext("2d"), id = sx.createImageData(w, h);
+  for(let i = 0; i < w*h; i++){ id.data[i*4] = id.data[i*4+1] = id.data[i*4+2] = 255; id.data[i*4+3] = alphaAt(i); }
+  sx.putImageData(id, 0, 0); return sc;
+}
+async function mpProb(kind){
+  const seg = await getSegmenter(kind);
+  const res = seg.segment(scaled(1024));
+  const bg = res.confidenceMasks[0], mw = bg.width, mh = bg.height, bgd = bg.getAsFloat32Array();
+  let peak = 0; for(let i = 0; i < mw*mh; i++) peak = Math.max(peak, 1 - bgd[i]);
+  const sc = probCanvas(mw, mh, i => Math.round((1 - bgd[i])*255));
+  if(res.close) res.close();
+  return {sc, peak};
+}
+/* „Motiv“ beim Himmel = alles, was NICHT Himmel ist (Vordergrund) */
+async function skyProb(){
+  const src = scaled(1024);
+  try {
+    const {T, seg} = await getSkyModel();
+    const blob = await new Promise(r => src.toBlob(r, "image/jpeg", .92));
+    const out = await seg(await T.RawImage.fromBlob(blob));
+    const sky = out.find(o => o.label === "sky");
+    if(!sky){ S.skyMethod = "ki"; return {sc:probCanvas(1, 1, () => 255), peak:0}; }
+    const m = sky.mask, ch = m.channels || 1, n = m.width*m.height; let cnt = 0;
+    for(let i = 0; i < n; i++) if(m.data[i*ch] > 127) cnt++;
+    S.skyMethod = "ki";
+    return {sc:probCanvas(m.width, m.height, i => 255 - m.data[i*ch]), peak: cnt/n > .02 ? 1 : 0};
+  } catch(e){
+    console.warn("Himmel-KI nicht verfügbar, nutze eigene Erkennung:", e);
+    S.skyMethod = "heuristik";
+    return skyHeuristic(src);
+  }
+}
+function skyHeuristic(src){
+  const k = 320 / Math.max(src.width, src.height), w = Math.max(8, Math.round(src.width*k)), h = Math.max(8, Math.round(src.height*k)), n = w*h;
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const x = c.getContext("2d", {willReadFrequently:true}); x.drawImage(src, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data, L = new Float32Array(n), G = new Float32Array(n);
+  for(let i = 0; i < n; i++) L[i] = d[i*4]*.299 + d[i*4+1]*.587 + d[i*4+2]*.114;
+  for(let y = 1; y < h-1; y++) for(let xx = 1; xx < w-1; xx++){ const i = y*w + xx; G[i] = Math.abs(L[i+1] - L[i-1]) + Math.abs(L[i+w] - L[i-w]); }
+  const Gs = boxMean(G, w, h, 2);
+  const top = Math.max(2, Math.round(h*.06)), seeds = [];
+  for(let y = 0; y < top; y++) for(let xx = 0; xx < w; xx++){ const i = y*w + xx; if(Gs[i] < 12 && L[i] > 60) seeds.push(i); }
+  if(seeds.length < w*top*.15) return {sc:probCanvas(1, 1, () => 255), peak:0};
+  let mr = 0, mg = 0, mb = 0; for(const i of seeds){ mr += d[i*4]; mg += d[i*4+1]; mb += d[i*4+2]; }
+  mr /= seeds.length; mg /= seeds.length; mb /= seeds.length;
+  let dev = 0; for(const i of seeds) dev += (Math.abs(d[i*4]-mr) + Math.abs(d[i*4+1]-mg) + Math.abs(d[i*4+2]-mb))/3; dev /= seeds.length;
+  const b0 = mb - (mr + mg)/2, blueSky = b0 > 8;   // blue sky: also demand blueness, so pale walls do not leak in
+  const vis = new Uint8Array(n), q = new Int32Array(n); let qh = 0, qt = 0;
+  for(const i of seeds){ vis[i] = 1; q[qt++] = i; }
+  while(qh < qt){
+    const p0 = q[qh++], px = p0 % w;
+    for(const q1 of [p0-1, p0+1, p0-w, p0+w]){
+      if(q1 < 0 || q1 >= n || vis[q1] || (q1 === p0-1 && px === 0) || (q1 === p0+1 && px === w-1)) continue;
+      const cd = Math.abs(d[q1*4]-d[p0*4]) + Math.abs(d[q1*4+1]-d[p0*4+1]) + Math.abs(d[q1*4+2]-d[p0*4+2]);
+      const dm = (Math.abs(d[q1*4]-mr) + Math.abs(d[q1*4+1]-mg) + Math.abs(d[q1*4+2]-mb))/3;
+      const bq = d[q1*4+2] - (d[q1*4] + d[q1*4+1])/2;
+      const ok = blueSky ? (bq >= b0*.4 - 4 && (cd < 14 || dm < 30 + dev)) : (dm < 18 + dev || (cd < 10 && dm < 35));
+      if(Gs[q1] < 22 && L[q1] > 40 && ok){ vis[q1] = 1; q[qt++] = q1; }
+    }
+  }
+  return {sc:probCanvas(w, h, i => vis[i] ? 0 : 255), peak: qt/n > .02 ? 1 : 0};
+}
 const segCache = {}; let visionP = null;
 async function getSegmenter(kind){
   if(segCache[kind]) return segCache[kind];
@@ -1565,15 +1643,9 @@ function guidedFilter(I, p, w, h, r, eps){
 }
 async function subjectMap(kind){
   if(S.subject && S.subject.kind === kind && S.subject.src === S.source) return S.subject;
-  const seg = await getSegmenter(kind);
-  const res = seg.segment(scaled(1024));
-  const bg = res.confidenceMasks[0], mw = bg.width, mh = bg.height, bgd = bg.getAsFloat32Array();
-  const sc = document.createElement("canvas"); sc.width = mw; sc.height = mh;
-  const sx = sc.getContext("2d"), id = sx.createImageData(mw, mh);
-  let peak = 0;
-  for(let i = 0; i < mw*mh; i++){ const pr = 1 - bgd[i]; peak = Math.max(peak, pr); id.data[i*4] = id.data[i*4+1] = id.data[i*4+2] = 255; id.data[i*4+3] = Math.round(pr*255); }
-  if(res.close) res.close();
-  sx.putImageData(id, 0, 0);
+  const srcAtStart = S.source, geoAtStart = JSON.stringify(S.crop);
+  const {sc, peak} = kind === "sky" ? await skyProb() : await mpProb(kind);
+  if(S.source !== srcAtStart || JSON.stringify(S.crop) !== geoAtStart) throw new Error("Foto hat sich während der Erkennung geändert");
   const k = 1024 / Math.max(srcW(), srcH()), w = Math.max(1, Math.round(srcW()*k)), h = Math.max(1, Math.round(srcH()*k));
   const uc = document.createElement("canvas"); uc.width = w; uc.height = h;
   const ux = uc.getContext("2d", {willReadFrequently:true}); ux.imageSmoothingQuality = "high";
@@ -1591,8 +1663,8 @@ async function applySubject(L, behind){
   if(!L || S.segBusy) return;
   const kind = S.segKind || "person";
   S.segBusy = true; refreshUI();
-  const first = !segCache[kind];
-  toast(first ? `KI-Modell „${SEG_MODELS[kind].name}“ wird geladen (einmalig, ca. ${SEG_MODELS[kind].size}) …` : "Motiv wird erkannt …");
+  const first = kind === "sky" ? !skyReady : !segCache[kind];
+  toast(first ? `KI-Modell „${SEG_MODELS[kind].name}“ wird geladen (einmalig, ca. ${SEG_MODELS[kind].size}) …` : (kind === "sky" ? "Himmel wird erkannt …" : "Motiv wird erkannt …"));
   let sm;
   try { sm = await subjectMap(kind); }
   catch(e){
@@ -1601,7 +1673,7 @@ async function applySubject(L, behind){
     return;
   }
   S.segBusy = false;
-  if(sm.peak < .35){ refreshUI(); toast(`Kein Motiv gefunden. Probier es mit „${kind === "person" ? "Objekt" : "Person"}“.`); return; }
+  if(sm.peak < .35){ refreshUI(); toast(kind === "sky" ? "Kein Himmel gefunden." : `Kein Motiv gefunden. Probier es mit „${kind === "person" ? "Objekt" : "Person"}“.`); return; }
   const mk = ensureMask(L); pushMaskUndo(mk);
   const x = mk.c.getContext("2d", {willReadFrequently:true});
   const t = document.createElement("canvas"); t.width = sm.w; t.height = sm.h;
@@ -1610,21 +1682,25 @@ async function applySubject(L, behind){
   tx.putImageData(im, 0, 0);
   x.clearRect(0, 0, mk.c.width, mk.c.height); x.drawImage(t, 0, 0, mk.c.width, mk.c.height);
   mk.ver++; draw(); refreshUI();
-  toast(behind ? "Die Ebene liegt jetzt hinter dem Motiv. Mit dem Pinsel im Tab Maske kannst du nachbessern." : "Die Ebene wirkt jetzt nur auf dem Motiv.");
+  const how = kind === "sky" && S.skyMethod === "heuristik" ? " (ohne KI erkannt)" : "";
+  if(kind === "sky") toast((behind ? "Die Ebene wirkt jetzt nur im Himmel" : "Die Ebene spart jetzt den Himmel aus") + how + ". Mit dem Pinsel im Tab Maske kannst du nachbessern.");
+  else toast(behind ? "Die Ebene liegt jetzt hinter dem Motiv. Mit dem Pinsel im Tab Maske kannst du nachbessern." : "Die Ebene wirkt jetzt nur auf dem Motiv.");
 }
 function subjectButtons(box, L, withOnly){
   const bar = document.createElement("div"); bar.className = "bar pro-only";
   const seg = document.createElement("div"); seg.className = "seg"; seg.style.flex = "1 1 100%";
-  for(const [k, n] of [["person","Person"],["objekt","Objekt / Tier"]]){
+  for(const [k, n] of [["person","Person"],["objekt","Objekt / Tier"],["sky","Himmel"]]){
     const bt = document.createElement("button"); bt.textContent = n; bt.setAttribute("aria-pressed", (S.segKind || "person") === k);
-    bt.onclick = () => { S.segKind = k; seg.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === bt)); };
+    bt.onclick = () => { S.segKind = k; refreshUI(); };
     seg.append(bt);
   }
-  const b1 = document.createElement("button"); b1.className = "btn primary"; b1.textContent = S.segBusy ? "Erkenne Motiv …" : "Hinter das Motiv legen";
+  const sky = S.segKind === "sky";
+  const b1 = document.createElement("button"); b1.className = "btn primary";
+  b1.textContent = S.segBusy ? (sky ? "Erkenne Himmel …" : "Erkenne Motiv …") : (sky ? (withOnly ? "Nur im Himmel" : "Hinter den Vordergrund legen") : "Hinter das Motiv legen");
   b1.disabled = !!S.segBusy; b1.onclick = () => applySubject(L, true);
   bar.append(seg, b1);
   if(withOnly){
-    const b2 = document.createElement("button"); b2.className = "btn"; b2.textContent = "Nur auf das Motiv";
+    const b2 = document.createElement("button"); b2.className = "btn"; b2.textContent = sky ? "Himmel aussparen" : "Nur auf das Motiv";
     b2.disabled = !!S.segBusy; b2.onclick = () => applySubject(L, false); bar.append(b2);
   }
   box.append(bar);

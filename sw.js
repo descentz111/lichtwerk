@@ -1,5 +1,5 @@
 // Offline cache: app shell first, fonts cached as they are used.
-const CACHE = "lichtwerk-v9";
+const CACHE = "lichtwerk-v10";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png",
   ...["sonne","flare","leck","prisma","nebel","dunst","rauch","staub","regen","schnee"].flatMap(n => [`overlays/${n}.jpg`, `overlays/${n}-thumb.jpg`])];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
@@ -8,7 +8,7 @@ self.addEventListener("fetch", e => {
   const req = e.request; if(req.method !== "GET") return;
   const url = new URL(req.url);
   const isFont = url.hostname.endsWith("fonts.googleapis.com") || url.hostname.endsWith("fonts.gstatic.com")
-    || (url.hostname === "cdn.jsdelivr.net" && url.pathname.includes("@mediapipe/tasks-vision@"))
+    || (url.hostname === "cdn.jsdelivr.net" && (url.pathname.includes("@mediapipe/tasks-vision@") || url.pathname.includes("@huggingface/transformers@") || url.pathname.includes("onnxruntime-web@")))
     || (url.hostname === "storage.googleapis.com" && url.pathname.startsWith("/mediapipe-models/"));  // KI-Modell: einmal laden, dann offline
   if(url.origin === location.origin && (req.mode === "navigate" || SHELL.some(s => url.pathname.endsWith(s.replace("./",""))))){
     // network first for the app itself so updates arrive, cache as fallback offline
