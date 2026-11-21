@@ -1632,21 +1632,8 @@ const MP_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const SEG_MODELS = {
   person:{name:"Person", size:"16 MB", url:"https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite"},
   objekt:{name:"Objekt", size:"3 MB", url:"https://storage.googleapis.com/mediapipe-models/image_segmenter/deeplab_v3/float32/1/deeplab_v3.tflite"},
-  sky:{name:"Himmel", size:"27 MB"},
 };
-/* Himmel: SegFormer-B0 (ADE20K, Klasse „sky“) über transformers.js – Lizenz NVIDIA, nur nicht-kommerziell.
-   Fällt die KI aus (offline, blockiert), übernimmt skyHeuristic() lizenzfrei. */
-const TF_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2/dist/transformers.min.js";
-let skyP = null, skyReady = false;
-async function getSkyModel(){
-  if(!skyP) skyP = (async () => {
-    const T = await import(TF_URL);
-    T.env.allowLocalModels = false;
-    const seg = await T.pipeline("image-segmentation", "Xenova/segformer-b0-finetuned-ade-512-512", {dtype:"q8"});
-    skyReady = true; return {T, seg};
-  })().catch(e => { skyP = null; throw e; });
-  return skyP;
-}
+/* Himmel: eigene, lizenzfreie Erkennung (Farbe, Struktur, Blauanteil, Region Growing ab dem oberen Rand) – ohne KI-Modell */
 function probCanvas(w, h, alphaAt){
   const sc = document.createElement("canvas"); sc.width = w; sc.height = h;
   const sx = sc.getContext("2d"), id = sx.createImageData(w, h);
@@ -1663,24 +1650,7 @@ async function mpProb(kind){
   return {sc, peak};
 }
 /* „Motiv“ beim Himmel = alles, was NICHT Himmel ist (Vordergrund) */
-async function skyProb(){
-  const src = scaled(1024);
-  try {
-    const {T, seg} = await getSkyModel();
-    const blob = await new Promise(r => src.toBlob(r, "image/jpeg", .92));
-    const out = await seg(await T.RawImage.fromBlob(blob));
-    const sky = out.find(o => o.label === "sky");
-    if(!sky){ S.skyMethod = "ki"; return {sc:probCanvas(1, 1, () => 255), peak:0}; }
-    const m = sky.mask, ch = m.channels || 1, n = m.width*m.height; let cnt = 0;
-    for(let i = 0; i < n; i++) if(m.data[i*ch] > 127) cnt++;
-    S.skyMethod = "ki";
-    return {sc:probCanvas(m.width, m.height, i => 255 - m.data[i*ch]), peak: cnt/n > .02 ? 1 : 0};
-  } catch(e){
-    console.warn("Himmel-KI nicht verfügbar, nutze eigene Erkennung:", e);
-    S.skyMethod = "heuristik";
-    return skyHeuristic(src);
-  }
-}
+async function skyProb(){ return skyHeuristic(scaled(1024)); }
 function skyHeuristic(src){
   const k = 320 / Math.max(src.width, src.height), w = Math.max(8, Math.round(src.width*k)), h = Math.max(8, Math.round(src.height*k)), n = w*h;
   const c = document.createElement("canvas"); c.width = w; c.height = h;
@@ -1778,7 +1748,7 @@ async function applySubject(L, behind){
   if(!L || S.segBusy) return;
   const kind = S.segKind || "person";
   S.segBusy = true; refreshUI();
-  const first = kind === "sky" ? !skyReady : !segCache[kind];
+  const first = kind !== "sky" && !segCache[kind];
   toast(first ? `KI-Modell „${SEG_MODELS[kind].name}“ wird geladen (einmalig, ca. ${SEG_MODELS[kind].size}) …` : (kind === "sky" ? "Himmel wird erkannt …" : "Motiv wird erkannt …"));
   let sm;
   try { sm = await subjectMap(kind); }
@@ -1797,8 +1767,7 @@ async function applySubject(L, behind){
   tx.putImageData(im, 0, 0);
   x.clearRect(0, 0, mk.c.width, mk.c.height); x.drawImage(t, 0, 0, mk.c.width, mk.c.height);
   mk.ver++; draw(); refreshUI();
-  const how = kind === "sky" && S.skyMethod === "heuristik" ? " (ohne KI erkannt)" : "";
-  if(kind === "sky") toast((behind ? "Die Ebene wirkt jetzt nur im Himmel" : "Die Ebene spart jetzt den Himmel aus") + how + ". Mit dem Pinsel im Tab Maske kannst du nachbessern.");
+  if(kind === "sky") toast((behind ? "Die Ebene wirkt jetzt nur im Himmel" : "Die Ebene spart jetzt den Himmel aus") + ". Feiner steuern kannst du mit der Pipette, nachbessern mit dem Pinsel.");
   else toast(behind ? "Die Ebene liegt jetzt hinter dem Motiv. Mit dem Pinsel im Tab Maske kannst du nachbessern." : "Die Ebene wirkt jetzt nur auf dem Motiv.");
 }
 function subjectButtons(box, L, withOnly){
