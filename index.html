@@ -694,6 +694,10 @@ cv.addEventListener("pointerdown", e => {
     else if(ptrs.size === 2){ const q = pinchInfo(); gesture = {type:"cropzoom", d0:q.d, z0:S.crop.zoom}; }
     return;
   }
+  if(S.pro && S.tab === "mask" && S.pickMode && selLayer()){
+    if(ptrs.size === 1){ hideTip(); const pt = ptrs.get(e.pointerId); pickColor(selLayer(), pt[0], pt[1]); }
+    gesture = null; return;
+  }
   if(S.pro && S.tab === "mask" && selLayer()){
     if(ptrs.size === 1){
       const pt = ptrs.get(e.pointerId), mk = ensureMask(selLayer()); pushMaskUndo(mk);
@@ -1340,6 +1344,115 @@ function undoMask(){
   const L = selLayer(); const mk = L && S.masks[L.id]; if(!mk || !mk.undo.length) return;
   mk.c.getContext("2d").putImageData(mk.undo.pop(), 0, 0); mk.ver++; draw(); buildMaskTab();
 }
+/* ---------- Farbbereich-Maske (Pipette) ---------- */
+const SRGB2LIN = Array.from({length:256}, (_, i) => { const c = i/255; return c <= .04045 ? c/12.92 : Math.pow((c + .055)/1.055, 2.4); });
+function labImage(w, h){
+  const key = w + "x" + h + JSON.stringify(S.crop);
+  if(S.labC && S.labC.key === key && S.labC.src === S.source) return S.labC;
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const x = c.getContext("2d", {willReadFrequently:true}); x.imageSmoothingQuality = "high"; x.drawImage(scaled(Math.max(w, h)), 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data, n = w*h, L = new Float32Array(n), A = new Float32Array(n), B = new Float32Array(n);
+  const f = t => t > .008856 ? Math.cbrt(t) : 7.787*t + 16/116;
+  for(let i = 0; i < n; i++){
+    const R = SRGB2LIN[d[i*4]], G = SRGB2LIN[d[i*4+1]], Bb = SRGB2LIN[d[i*4+2]];
+    const fx = f((R*.4124 + G*.3576 + Bb*.1805)/.95047), fy = f(R*.2126 + G*.7152 + Bb*.0722), fz = f((R*.0193 + G*.1192 + Bb*.9505)/1.08883);
+    L[i] = 116*fy - 16; A[i] = 500*(fx - fy); B[i] = 200*(fy - fz);
+  }
+  return S.labC = {key, src:S.source, w, h, L, A, B, rgb:d};
+}
+function pickColor(L, px, py){
+  const mk = ensureMask(L), w = mk.c.width, h = mk.c.height, lab = labImage(w, h);
+  const mx = Math.round(px / cv.width * (w - 1)), my = Math.round(py / cv.height * (h - 1));
+  let l = 0, a = 0, b = 0, r = 0, g = 0, bl = 0, n = 0;
+  for(let dy = -2; dy <= 2; dy++) for(let dx = -2; dx <= 2; dx++){
+    const x = clamp(mx + dx, 0, w-1), y = clamp(my + dy, 0, h-1), i = y*w + x;
+    l += lab.L[i]; a += lab.A[i]; b += lab.B[i]; r += lab.rgb[i*4]; g += lab.rgb[i*4+1]; bl += lab.rgb[i*4+2]; n++;
+  }
+  if(!S.crange || S.crange.layerId !== L.id) S.crange = {layerId:L.id, pts:[], tol:.35, soft:.5, contig:true, invert:false, undone:false};
+  const cr = S.crange;
+  if(!cr.undone){ pushMaskUndo(mk); cr.undone = true; }
+  cr.pts.push({mx, my, L:l/n, A:a/n, B:b/n, css:`rgb(${Math.round(r/n)},${Math.round(g/n)},${Math.round(bl/n)})`});
+  computeRange(L); buildMaskTab();
+}
+let rangeRaf = false;
+function computeRangeSoon(L){ if(rangeRaf) return; rangeRaf = true; requestAnimationFrame(() => { rangeRaf = false; computeRange(L); }); }
+function computeRange(L){
+  const cr = S.crange; if(!cr || !cr.pts.length) return;
+  const mk = ensureMask(L), w = mk.c.width, h = mk.c.height, n = w*h, lab = labImage(w, h);
+  const tolE = 2 + cr.tol*cr.tol*70, lo = tolE*(1 - cr.soft*.7), hi = tolE*(1 + cr.soft*.6) + .01;
+  // colour distances only change when samples change; tolerance drags just remap them (fast)
+  const dkey = cr.pts.length + ":" + w + "x" + h;
+  if(!cr.dist || cr.dkey !== dkey){
+    cr.dist = new Float32Array(n); cr.dkey = dkey;
+    for(let i = 0; i < n; i++){
+      let dmin = 1e9;
+      for(const s of cr.pts){
+        const dl = (lab.L[i] - s.L)*.75, da = lab.A[i] - s.A, db = lab.B[i] - s.B;   // lightness weighted less: skies fade in brightness
+        const dd = dl*dl + da*da + db*db; if(dd < dmin) dmin = dd;
+      }
+      cr.dist[i] = Math.sqrt(dmin);
+    }
+  }
+  const a = new Float32Array(n);
+  for(let i = 0; i < n; i++){
+    const dist = cr.dist[i];
+    if(dist <= lo) a[i] = 1; else if(dist < hi){ const t = (dist - lo)/(hi - lo); a[i] = 1 - t*t*(3 - 2*t); }
+  }
+  if(cr.contig){
+    const vis = new Uint8Array(n), q = new Int32Array(n); let qh = 0, qt = 0;
+    for(const s of cr.pts){ const i = s.my*w + s.mx; if(!vis[i]){ vis[i] = 1; q[qt++] = i; } }
+    while(qh < qt){
+      const p0 = q[qh++], px = p0 % w;
+      for(const q1 of [p0-1, p0+1, p0-w, p0+w]){
+        if(q1 < 0 || q1 >= n || vis[q1] || (q1 === p0-1 && px === 0) || (q1 === p0+1 && px === w-1)) continue;
+        if(a[q1] > .02){ vis[q1] = 1; q[qt++] = q1; }
+      }
+    }
+    for(let i = 0; i < n; i++) if(!vis[i]) a[i] = 0;
+  }
+  const x = mk.c.getContext("2d", {willReadFrequently:true}), im = x.createImageData(w, h);
+  for(let i = 0; i < n; i++){ im.data[i*4] = im.data[i*4+1] = im.data[i*4+2] = 255; im.data[i*4+3] = Math.round((cr.invert ? 1 - a[i] : a[i])*255); }
+  x.putImageData(im, 0, 0); mk.ver++; draw();
+}
+function rangeSection(box, L){
+  const cr = S.crange && S.crange.layerId === L.id ? S.crange : null;
+  const bar = document.createElement("div"); bar.className = "bar"; bar.style.marginTop = "0";
+  const pk = document.createElement("button"); pk.className = "btn" + (S.pickMode ? " primary" : "");
+  pk.innerHTML = '<svg viewBox="0 0 24 24"><path d="m14.5 4.5 5 5M17 2l5 5-3 3-5-5 3-3z"/><path d="M14 8 4 18l-1 3 3-1 10-10"/></svg>';
+  pk.append(S.pickMode ? (cr && cr.pts.length ? "Weitere Farbe antippen …" : "Tippe ins Bild …") : (cr && cr.pts.length ? "Farbe hinzufügen" : "Pipette"));
+  pk.onclick = () => { S.pickMode = !S.pickMode; if(S.pickMode) showTip("pick"); else hideTip(); buildMaskTab(); };
+  bar.append(pk);
+  if(cr && cr.pts.length){
+    const sw = document.createElement("div"); sw.className = "swatches"; sw.style.minHeight = "34px";
+    for(const s of cr.pts){ const d = document.createElement("span"); d.className = "sw"; d.style.cssText = `background:${s.css};width:26px;height:26px;display:inline-block`; sw.append(d); }
+    const clr = document.createElement("button"); clr.className = "btn"; clr.textContent = "Farben löschen";
+    clr.onclick = () => { S.crange = null; S.pickMode = false; buildMaskTab(); };
+    bar.append(sw, clr);
+  }
+  box.append(bar);
+  if(!cr || !cr.pts.length) return;
+  const upd = () => computeRangeSoon(L);
+  const row = (key, label, min, max, step, f) => {
+    const r = document.createElement("div"); r.className = "ctl";
+    const lab = document.createElement("label"); lab.htmlFor = "cr_" + key; lab.textContent = label;
+    const inp = document.createElement("input"); inp.type = "range"; inp.id = "cr_" + key; inp.min = min; inp.max = max; inp.step = step; inp.value = cr[key];
+    const out = document.createElement("output"); out.textContent = f(cr[key]);
+    inp.oninput = () => { cr[key] = +inp.value; out.textContent = f(cr[key]); upd(); };
+    r.append(lab, inp, out); box.append(r);
+  };
+  row("tol", "Toleranz", 0, 1, .01, v => Math.round(v*100) + "%");
+  row("soft", "Weiche Kante", 0, 1, .01, v => Math.round(v*100) + "%");
+  const sw = (key, label) => {
+    const r = document.createElement("div"); r.className = "ctl";
+    const lab = document.createElement("label"); lab.htmlFor = "cr_" + key; lab.textContent = label;
+    const c = document.createElement("input"); c.type = "checkbox"; c.className = "switch"; c.id = "cr_" + key; c.checked = cr[key];
+    c.onchange = () => { cr[key] = c.checked; computeRange(L); };
+    r.append(lab, c, document.createElement("span")); box.append(r);
+  };
+  sw("contig", "Zusammenhängend");
+  sw("invert", "Umkehren");
+}
+
 function buildMaskTab(){
   const box = $("#p-mask"); if(!box) return; box.replaceChildren();
   const L = selLayer();
@@ -1352,6 +1465,8 @@ function buildMaskTab(){
   box.append(head);
   groupHead(box, "Motiv erkennen (KI)");
   subjectButtons(box, L, true);
+  groupHead(box, "Farbbereich (Pipette)");
+  rangeSection(box, L);
   groupHead(box, "Pinsel");
   const tool = {v: S.brush.erase ? "erase" : "paint"};
   const seg = document.createElement("div"); seg.className = "seg";
@@ -1858,6 +1973,8 @@ function buildCropPanel(){
 const TIPS = {
   curve:{title:"Gradationskurve", icon:'<svg viewBox="0 0 24 24"><path d="M3 21h18M3 21V3"/><path d="M4 19c5 0 5-5 8-7s4-7 8-8"/></svg>',
     text:"Ziel: Helligkeit und Kontrast gezielt formen. Mitte nach oben macht die Mitteltöne heller, eine S-Form gibt mehr Kontrast, den linken Endpunkt anheben ergibt matte Schwarztöne. Mit R, G, B tönst du Tiefen oder Lichter."},
+  pick:{title:"Pipette", icon:'<svg viewBox="0 0 24 24"><path d="m14.5 4.5 5 5M17 2l5 5-3 3-5-5 3-3z"/><path d="M14 8 4 18l-1 3 3-1 10-10"/></svg>',
+    text:"Ziel: alle ähnlichen Farben auf einmal maskieren, zum Beispiel den Himmel. Tippe auf die Farbe. Weitere Taps fügen Farben hinzu, mit „Toleranz“ steuerst du, wie ähnlich die Farben sein müssen."},
   hsl:{title:"Farbmischer (HSL)", icon:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.4 6.4"/></svg>',
     text:"Ziel: einzelne Farben verändern, ohne den Rest anzutasten. Zum Beispiel Blau-Luminanz runter für einen dramatischen Himmel, Orange-Sättigung runter für ruhigere Hauttöne, Grün-Farbton Richtung Gelb für warmes Laub."},
 };
@@ -1983,7 +2100,8 @@ function buildHSL(box, L){
 /* ---------- UI: tabs ---------- */
 function openTab(name){
   S.tab = name;
-  if(name !== "adjust") hideTip();
+  if(name !== "adjust" && !(name === "mask" && S.pickMode)) hideTip();
+  if(name !== "mask") S.pickMode = false;
   document.querySelectorAll(".tab").forEach(x => x.setAttribute("aria-selected", x.dataset.tab === name));
   for(const k of ["looks","light","text","layers","adjust","mask"]) $("#p-"+k).hidden = k !== name;
   refreshUI(); draw();
@@ -2279,7 +2397,7 @@ $("#file").onchange = async e => {
   img.src = url;
   try { await img.decode(); }
   catch { toast("Dieses Bildformat kann der Browser nicht öffnen. Versuch es mit JPEG oder PNG."); return; }
-  S.source = img; S.isDemo = false; S.fileName = f.name.replace(/\.[^.]+$/,"") || "foto"; S.masks = {}; S.subject = null; S.crop = {...CROPDEF}; makeProxy();
+  S.source = img; S.isDemo = false; S.fileName = f.name.replace(/\.[^.]+$/,"") || "foto"; S.masks = {}; S.subject = null; S.crange = null; S.labC = null; S.pickMode = false; S.crop = {...CROPDEF}; makeProxy();
   $("#hint").hidden = true;
   setupPreview(); prepareThumbSource(); refreshUI();
 };
