@@ -120,6 +120,8 @@ output{font-variant-numeric:tabular-nums;font-size:15px;color:var(--muted);text-
 .strip{display:flex;gap:10px;overflow-x:auto;padding:2px 2px 4px;scroll-snap-type:x proximity;scrollbar-width:none}
 .strip::-webkit-scrollbar{display:none}
 .look{flex:none;width:78px;border:0;background:none;padding:0;display:flex;flex-direction:column;gap:6px;scroll-snap-align:start;text-align:center}
+.look.wide{width:100px}
+.look.wide canvas{width:100px;height:100px}
 .look canvas{width:78px;height:78px;border-radius:12px;display:block;background:var(--raise);box-shadow:0 0 0 0 var(--accent)}
 .look span{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .look[aria-pressed="true"] canvas{box-shadow:0 0 0 2.5px var(--accent)}
@@ -237,6 +239,7 @@ input[type=range]:disabled{opacity:.3}
       <div class="fams" id="cats"></div>
       <div class="lks" id="swatches" hidden></div>
       <div class="strip" id="strip"></div>
+      <p class="empty" id="proNote" hidden style="padding:8px 2px 0"></p>
       <div class="amount"><label for="amt">Stärke</label><input type="range" id="amt" min="0" max="1" step="0.01"><output id="amtOut"></output></div>
     </div>
     <div class="pane" id="p-light" hidden></div>
@@ -349,6 +352,47 @@ const FAMILIES = [
     {temp:.08,vibrance:.12,contrast:.06},
     {fade:.1,contrast:-.05,saturation:.92}]},
 ];
+/* ---------- Profi-Setups: komplette Bearbeitungen aus mehreren Ebenen ---------- */
+const CUR = rgb => ({rgb, r:[[0,0],[1,1]], g:[[0,0],[1,1]], b:[[0,0],[1,1]]});
+const HSLV = o => ["red","orange","yellow","green","aqua","blue","purple","magenta"].map(k => o[k] ? [...o[k]] : [0,0,0]);
+const S_SOFT = [[0,.02],[.25,.24],[.75,.78],[1,.99]], S_LIGHT = [[0,0],[.25,.21],[.75,.8],[1,1]], S_STRONG = [[0,0],[.22,.13],[.78,.88],[1,1]], MATTE = [[0,.07],[.3,.29],[.75,.78],[1,.96]];
+const PRO_CATS = ["Natur", "Porträt", "S/W"];
+const PRO_SETUPS = [
+  {cat:"Natur", key:"n1", name:"Klare Landschaft", note:"Mehr Tiefe und Klarheit, Himmel automatisch betont.", layers:[
+    {kind:"color", name:"Basis", p:{contrast:.12, vibrance:.2, highlights:-.2, shadows:.15, curve:CUR(S_LIGHT), hsl:HSLV({blue:[0,.1,-.15], aqua:[0,.1,-.1], green:[.1,-.05,0], yellow:[0,0,.05]})}},
+    {kind:"color", name:"Himmel betonen", mask:{kind:"sky", behind:true}, p:{exposure:-.25, contrast:.1, saturation:1.1, highlights:-.2, temp:-.05}}]},
+  {cat:"Natur", key:"n2", name:"Goldenes Licht", note:"Warmes Abendlicht mit leichtem Dunst.", layers:[
+    {kind:"color", name:"Warmes Licht", p:{temp:.25, tint:.05, vibrance:.15, highlights:-.25, shadows:.1, hiCol:"#ffd29a", hiAmt:.25, shCol:"#4a3a5a", shAmt:.15, curve:CUR(S_SOFT), hsl:HSLV({orange:[0,.1,.05], yellow:[-.1,.1,0], green:[.15,-.15,0]})}},
+    {kind:"light", style:"dunst", name:"Dunst", amount:.25, p:{color:"#ffd6a8"}}]},
+  {cat:"Natur", key:"n3", name:"Wald & Moos", note:"Olivgrün statt Neongrün, matte Tiefen, Bodennebel.", layers:[
+    {kind:"color", name:"Waldfarben", p:{tint:-.06, saturation:.9, contrast:.15, fade:.08, shCol:"#1f3a33", shAmt:.3, hiCol:"#efe6c8", hiAmt:.15, curve:CUR(MATTE), hsl:HSLV({green:[.2,-.3,-.1], yellow:[-.15,-.2,0], aqua:[0,-.2,-.05], blue:[0,-.15,-.1]})}},
+    {kind:"light", style:"nebel", name:"Bodennebel", amount:.35, p:{ground:.55}}]},
+  {cat:"Natur", key:"n4", name:"Nebelmorgen", note:"Kühle, ruhige Stimmung mit weichem Nebel.", layers:[
+    {kind:"color", name:"Kühler Morgen", p:{temp:-.12, exposure:.08, contrast:-.08, saturation:.75, fade:.2, shCol:"#566a7a", shAmt:.25, curve:CUR([[0,.06],[.5,.52],[1,.96]]), hsl:HSLV({blue:[0,-.2,.05]})}},
+    {kind:"light", style:"nebel", name:"Nebel", amount:.5, p:{ground:.7}}]},
+  {cat:"Porträt", key:"p1", name:"Porträt natürlich", note:"Ruhige Hauttöne, Hintergrund weich wie mit offener Blende.", needsPerson:true, layers:[
+    {kind:"color", name:"Haut & Tonwerte", p:{vibrance:.08, highlights:-.15, shadows:.1, contrast:.06, curve:CUR(S_SOFT), hsl:HSLV({red:[0,-.08,.04], orange:[0,-.12,.12], yellow:[0,-.1,0]})}},
+    {kind:"blur", name:"Hintergrund weich", mask:{kind:"person", behind:true, required:true}, p:{strength:.35, size:.02, soft:.5}}]},
+  {cat:"Porträt", key:"p2", name:"Porträt warm (Film)", note:"Warmer, matter Film-Look mit feinem Korn.", layers:[
+    {kind:"color", name:"Warmer Film", p:{temp:.15, tint:.04, saturation:.9, fade:.15, grain:.15, hiCol:"#ffd9b8", hiAmt:.25, shCol:"#3c3340", shAmt:.2, curve:CUR(MATTE), hsl:HSLV({orange:[0,-.05,.1], green:[.1,-.3,0], blue:[0,-.2,0]})}}]},
+  {cat:"Porträt", key:"p3", name:"Porträt kühl (Editorial)", note:"Klare, kühle Magazin-Optik mit natürlicher Haut.", layers:[
+    {kind:"color", name:"Editorial", p:{temp:-.12, contrast:.18, saturation:.85, vig:.2, shCol:"#1f3a4a", shAmt:.35, hiCol:"#f2e6dc", hiAmt:.1, curve:CUR(S_LIGHT), hsl:HSLV({red:[0,-.1,0], orange:[0,-.05,.08], blue:[0,-.15,-.1]})}}]},
+  {cat:"Porträt", key:"p4", name:"Motiv hervorheben", note:"Person bleibt hell, die Umgebung wird dezent abgedunkelt.", needsPerson:true, layers:[
+    {kind:"color", name:"Basis", p:{vibrance:.1, contrast:.1, hsl:HSLV({orange:[0,-.08,.1]})}},
+    {kind:"color", name:"Umgebung abdunkeln", mask:{kind:"person", behind:true, required:true}, p:{exposure:-.55, saturation:.8}}]},
+  {cat:"S/W", key:"s1", name:"S/W Klassisch", note:"Ausgewogenes Schwarzweiß, Haut hell, Himmel etwas dunkler.", layers:[
+    {kind:"color", name:"Schwarzweiß", p:{saturation:0, contrast:.15, curve:CUR(S_LIGHT), hsl:HSLV({red:[0,0,.1], orange:[0,0,.12], blue:[0,0,-.15]})}}]},
+  {cat:"S/W", key:"s2", name:"S/W Dramatisch", note:"Dunkler Himmel, starke Kurve, Vignette und Korn.", layers:[
+    {kind:"color", name:"Schwarzweiß dramatisch", p:{saturation:0, contrast:.3, vig:.3, grain:.2, curve:CUR(S_STRONG), hsl:HSLV({blue:[0,0,-.6], aqua:[0,0,-.4], orange:[0,0,.2], red:[0,0,.1]})}},
+    {kind:"color", name:"Himmel dunkler", mask:{kind:"sky", behind:true}, p:{exposure:-.3, contrast:.1}}]},
+  {cat:"S/W", key:"s3", name:"S/W Matt", note:"Weiches, mattes Schwarzweiß mit angehobenen Tiefen.", layers:[
+    {kind:"color", name:"Schwarzweiß matt", p:{saturation:0, fade:.3, contrast:-.05, grain:.2, curve:CUR([[0,.1],[.5,.5],[1,.92]])}}]},
+  {cat:"S/W", key:"s4", name:"S/W Street", note:"Harter Kontrast mit kräftigem Filmkorn.", layers:[
+    {kind:"color", name:"Street", p:{saturation:0, contrast:.45, grain:.5, vig:.25, curve:CUR([[0,0],[.2,.12],[.8,.9],[1,1]]), hsl:HSLV({orange:[0,0,.1]})}}]},
+  {cat:"S/W", key:"s5", name:"S/W Selen", note:"Schwarzweiß mit kühl-violetten Tiefen und warmen Lichtern.", layers:[
+    {kind:"color", name:"Selen-Tonung", p:{saturation:0, contrast:.2, shCol:"#4a3040", shAmt:.5, hiCol:"#f0e2cc", hiAmt:.3, curve:CUR(S_LIGHT)}}]},
+];
+
 const LOOKS = [
   {key:"neutral", name:"Neutral", cat:"-", p:{}},
   ...FAMILIES.flatMap(f => f.vars.map((p, i) => ({key:f.key + (i+1), code:f.code + (i+1), fam:f.key, name:`${f.name} ${f.code}${i+1}`, cat:f.name, p}))),
@@ -1782,6 +1826,43 @@ async function subjectMap(kind){
   for(let i = 0; i < q.length; i++) q[i] = Math.min(1, Math.max(0, (q[i] - .5)*1.35 + .5));
   return S.subject = {kind, src:S.source, w, h, data:q, peak};
 }
+async function autoMask(L, kind, behind){
+  const sm = await subjectMap(kind);
+  if(sm.peak < .35) throw new Error("nichts gefunden");
+  if(kind !== "sky"){ let on = 0; for(const v of sm.data) if(v > .5) on++; if(on / sm.data.length < .03) throw new Error("Motiv zu klein"); }
+  const mk = ensureMask(L), x = mk.c.getContext("2d", {willReadFrequently:true});
+  const t = document.createElement("canvas"); t.width = sm.w; t.height = sm.h;
+  const tx = t.getContext("2d"), im = tx.createImageData(sm.w, sm.h);
+  for(let i = 0; i < sm.data.length; i++){ const a = behind ? 1 - sm.data[i] : sm.data[i]; im.data[i*4] = im.data[i*4+1] = im.data[i*4+2] = 255; im.data[i*4+3] = Math.round(a*255); }
+  tx.putImageData(im, 0, 0);
+  x.clearRect(0, 0, mk.c.width, mk.c.height); x.drawImage(t, 0, 0, mk.c.width, mk.c.height); mk.ver++;
+}
+function proLayer(d){
+  let L;
+  if(d.kind === "light"){ const lp = fxOf(d.style) || {}; L = {kind:"light", style:d.style, name:d.name, amount:d.amount ?? lp.amount ?? 1, on:true, p:{...LDEF, ...(lp.def || {}), ...JSON.parse(JSON.stringify(d.p || {}))}}; }
+  else if(d.kind === "blur") L = {kind:"blur", name:d.name, amount:d.amount ?? 1, on:true, p:{...BDEF, ...d.p}};
+  else L = {kind:"color", look:"neutral", name:d.name, amount:d.amount ?? 1, on:true, p:{...DEF, ...JSON.parse(JSON.stringify(d.p || {}))}};
+  L.id = newId(); return L;
+}
+async function applyProSetup(st){
+  if(S.segBusy) return;
+  const layers = st.layers.map(proLayer);
+  S.layers = layers; S.masks = {}; S.sel = layers[0].id; changed(true);
+  const jobs = st.layers.map((d, i) => d.mask ? [layers[i], d.mask] : null).filter(Boolean);
+  if(!jobs.length){ toast(`„${st.name}“ angewendet. Jede Ebene kannst du einzeln anpassen.`); return; }
+  S.segBusy = true;
+  if(jobs.some(([, m]) => m.kind === "person")) toast(segCache.person ? "Person wird erkannt …" : "KI erkennt die Person (beim ersten Mal ca. 25 MB Download) …");
+  let failed = [];
+  for(const [L, m] of jobs){
+    try { await autoMask(L, m.kind, m.behind); }
+    catch(e){ if(m.required){ L.on = false; } failed.push([L, m]); }
+  }
+  S.segBusy = false; changed(true); refreshUI();
+  if(!failed.length) toast(`„${st.name}“ angewendet. Masken wurden automatisch gesetzt.`);
+  else if(failed.some(([, m]) => m.kind === "person")) toast(inFrame ? "Keine Personen-Erkennung in dieser Ansicht. Die Ebene „" + failed[0][0].name + "“ ist ausgeblendet." : "Keine Person erkannt. Die Ebene „" + failed[0][0].name + "“ ist ausgeblendet.");
+  else toast(`„${st.name}“ angewendet. Kein Himmel gefunden, die Himmel-Ebene wirkt auf das ganze Bild.`);
+}
+
 async function applySubject(L, behind){
   if(!L || S.segBusy) return;
   const kind = S.segKind || "person";
@@ -2122,8 +2203,30 @@ const amt = $("#amt");
 amt.oninput = () => { const L = colorTarget(); if(!L) return; L.amount = +amt.value; $("#amtOut").textContent = Math.round(L.amount*100); changed(false); };
 
 const famByName = n => FAMILIES.find(f => f.name === n) || null;
+function buildProStrip(box){
+  const list = PRO_SETUPS.filter(st => st.cat === S.cat), cards = [];
+  for(const st of list){
+    const b = document.createElement("button"); b.className = "look wide";
+    const c = document.createElement("canvas"); c.width = c.height = TH;
+    const sp = document.createElement("span"); sp.textContent = st.name;
+    b.append(c, sp); b.title = st.note; b.setAttribute("aria-label", st.name + ". " + st.note);
+    b.onclick = () => { applyProSetup(st); $("#proNote").textContent = st.note + (st.needsPerson ? " Erkennt die Person automatisch." : "") + " Die Ebenen findest du im Tab Ebenen."; };
+    box.append(b); cards.push([c, st]);
+  }
+  $("#proNote").textContent = S.cat === "Porträt" ? "Komplette Porträt-Bearbeitungen. Einige erkennen die Person automatisch und brauchen dafür beim ersten Mal Internet." :
+    S.cat === "Natur" ? "Komplette Landschafts-Bearbeitungen aus mehreren Ebenen, teils mit automatischer Himmel-Maske." :
+    "Schwarzweiß mit gezielter Helligkeit je Farbe, so wie bei Farbfiltern in der Analogfotografie.";
+  let i = 0;
+  const step = () => {
+    const item = cards[i++]; if(!item || !item[0].isConnected) return;
+    const [c, st] = item, cl = st.layers.filter(d => d.kind === "color" && !d.mask).map(proLayer);
+    TR.render(cl); c.getContext("2d").drawImage(thumbCanvas, 0, 0, c.width, c.height);
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
 function buildCats(){
-  const names = [...(setups.length ? ["Setups"] : []), ...(customLooks.length ? ["Eigene"] : []), ...FAMILIES.map(f => f.name)];
+  const names = [...(setups.length ? ["Setups"] : []), ...(customLooks.length ? ["Eigene"] : []), ...PRO_CATS, ...FAMILIES.map(f => f.name)];
   if(!names.includes(S.cat)){ const L = colorTarget(), lk = L && lookByKey(L.look); S.cat = (lk && famByName(lk.cat)) ? lk.cat : FAMILIES[0].name; }
   const box = $("#cats"); box.replaceChildren();
   for(const n of names){
@@ -2173,7 +2276,9 @@ function buildStrip(){
   $("#p-looks .amount").hidden = S.cat === "Setups";
   const fam = famByName(S.cat);
   $("#swatches").hidden = !fam; box.hidden = !!fam;
-  if(fam){ buildSwatches(fam); return; }
+  if(fam){ buildSwatches(fam); $("#proNote").hidden = true; return; }
+  $("#proNote").hidden = !PRO_CATS.includes(S.cat);
+  if(PRO_CATS.includes(S.cat)){ $("#p-looks .amount").hidden = true; buildProStrip(box); return; }
   if(S.cat === "Setups"){
     for(const st of setups){
       const wrap = document.createElement("div"); wrap.className = "lw";
